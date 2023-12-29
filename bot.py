@@ -16,9 +16,9 @@ alfabeto = list(string.ascii_lowercase)
 palavraMute = None
 contador = 0
 # Trocar caso necessário
-TOKEN = os.getenv('DISCORD_TOKEN')
-TOJAO = os.getenv('TOJAO')
-MENES_SUECOS = os.getenv('MENES_SUECOS')
+TOKEN = os.getenv('DISCORD_TOKEN') # token do bot
+TOJAO = os.getenv('TOJAO') # user id do tojao
+MENES_SUECOS = os.getenv('MENES_SUECOS') # server id do server menes suecos
 
 #tempoAtualizado = time.localtime()
 #if tempoAtualizado.tm_hour == 0 & tempoAtualizado.tm_min == 0 & tempoAtualizado.tm_sec == 0:
@@ -56,7 +56,7 @@ async def getNewWord():
 
 @tree.command(name = "novapalavra", description="Busca uma nova palavra aleatória no dicionário")
 async def novapalavra(interaction: discord.Interaction):
-    if interaction.user.guild_permissions.manage_messages and interaction.guild_id == MENES_SUECOS:
+    if interaction.user.guild_permissions.administrator and interaction.guild_id == int(MENES_SUECOS):
         await getNewWord()
         await interaction.response.send_message(palavraMute, ephemeral=True)
         print(f"Motivo: comando novapalavra")
@@ -65,7 +65,7 @@ async def novapalavra(interaction: discord.Interaction):
 
 @tree.command(name = "redefinepalavra", description="Coloca a palavra atual como NULL, nenhuma palavra dará timeout")
 async def redefinepalavra(interaction: discord.Interaction):
-    if interaction.user.guild_permissions.manage_messages and interaction.guild_id == MENES_SUECOS:
+    if interaction.user.guild_permissions.administrator and interaction.guild_id == int(MENES_SUECOS):
         global palavraMute
         palavraMute = None
         print("A palavra escolhida foi redefinida\n Motivo: comando redefinepalavra")
@@ -75,7 +75,7 @@ async def redefinepalavra(interaction: discord.Interaction):
 
 @tree.command(name = "mostrapalavra", description="Mostra a palavra atual que dá timeout")
 async def mostrapalavra(interaction: discord.Interaction):
-    if interaction.user.guild_permissions.manage_messages and interaction.guild_id == MENES_SUECOS:
+    if interaction.user.guild_permissions.administrator and interaction.guild_id == int(MENES_SUECOS):
         global palavraMute
         if palavraMute == None:
             await interaction.response.send_message("Não tem nenhuma palavra atual que dá timeout", ephemeral=True)
@@ -87,7 +87,7 @@ async def mostrapalavra(interaction: discord.Interaction):
 
 @tree.command(name = "escolhepalavra", description="Define manualmente uma palavra para dar timeout")
 async def escolhepalavra(interaction: discord.Interaction, msg: str):
-    if interaction.user.guild_permissions.manage_messages and interaction.guild_id == MENES_SUECOS:
+    if interaction.user.guild_permissions.administrator and interaction.guild_id == int(MENES_SUECOS):
         global palavraMute
         msg = msg.lower
         palavraMute = msg
@@ -100,12 +100,12 @@ async def escolhepalavra(interaction: discord.Interaction, msg: str):
 async def on_message(message):
     if client.user.id != message.author.id:
         if palavraMute != None and palavraMute in str.lower(message.content):
-            server = client.get_guild(MENES_SUECOS)
+            server = client.get_guild(int(MENES_SUECOS))
 
             member = await server.fetch_member(message.author.id)
 
             duration = timedelta(days = 0, hours = 0, minutes = 5, seconds = 0)
-            if member.guild_permissions.manage_messages:
+            if member.guild_permissions.administrator:
                 print(f"User {message.author.name} com permissão de ADM falou a palavra proibida")
                 await message.channel.send(f"Sem graça, o ADM falou a palavra proibida...")
             else:
