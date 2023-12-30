@@ -129,9 +129,9 @@ async def on_message(message):
                 global trocaPalavra
                 if trocaPalavra == True:
                     await message.channel.send(f"Parabéns! Você falou a palavra proibida do dia! A palavra é: {palavraMute}\nSeu prêmio é {duration} de Timeout!\nA palavra foi redefinida")
+                    await getNewWord()
                 else:
                     await message.channel.send(f"Parabéns! Você falou a palavra proibida do dia! A palavra é: {palavraMute}\nSeu prêmio é {duration} de Timeout!")
-            await getNewWord()
         # ARRUMAR
         #elif TOJAO in message.content:
             #print(f"tojao pingado")
@@ -144,7 +144,7 @@ async def on_message(message):
         else:
             global contador
             contador += 1
-            if contador > 100:
+            if contador > 100 and trocaPalavra == True:
                 await getNewWord()
                 print(f"Motivo: atingiu 100 mensagens sem a palavra")
                 contador = 0
