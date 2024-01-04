@@ -1,6 +1,6 @@
 # bot.py
 import os
-import time
+import asyncio
 import discord
 import random
 import string
@@ -15,17 +15,12 @@ load_dotenv()
 alfabeto = list(string.ascii_lowercase)
 palavraMute = None
 contador = 0
+palavrasMax = 100
 trocaPalavra = True
 # Trocar caso necessário
 TOKEN = os.getenv('DISCORD_TOKEN') # token do bot
 TOJAO = os.getenv('TOJAO') # user id do tojao
 MENES_SUECOS = os.getenv('MENES_SUECOS') # server id do server menes suecos
-
-#tempoAtualizado = time.localtime()
-#if tempoAtualizado.tm_hour == 0 & tempoAtualizado.tm_min == 0 & tempoAtualizado.tm_sec == 0:
-#    novaPalavra = random.choice(alfabeto) + random.choice(alfabeto) + random.choice(alfabeto) + random.choice(alfabeto) + random.choice(alfabeto)
-#    for number in range(3):
-#        novaPalavra = novaPalavra.replace(random.choice(alfabeto), "")
 
 class aclient(discord.Client):
     def __init__(self):
@@ -37,17 +32,18 @@ class aclient(discord.Client):
         if not self.synced:
             await tree.sync()
             self.synced = True
-        print("connected")
+        print("Connected to Discord")
 
 client = aclient()
 tree = app_commands.CommandTree(client)
 
+# Subrotina para pegar uma palavra nova
 async def getNewWord():
     novaPalavra = None
     newWord = None
     while newWord is None or not newWord:
         novaPalavra = random.choice(alfabeto) + random.choice(alfabeto) + random.choice(alfabeto) + random.choice(alfabeto) + random.choice(alfabeto)
-        for i in range(3):
+        for i in range(4):
             novaPalavra = novaPalavra.replace(random.choice(alfabeto), "")
         newWord = dictionary.select(novaPalavra, dictionary.Selector.PREFIX)
     indexAleatorio = random.randrange(len(newWord))
@@ -58,6 +54,8 @@ async def getNewWord():
 @tree.command(name = "novapalavra", description="Busca uma nova palavra aleatória no dicionário")
 async def novapalavra(interaction: discord.Interaction):
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
+        global contador
+        contador = 0
         await getNewWord()
         await interaction.response.send_message(palavraMute, ephemeral=True)
         print(f"Motivo: comando novapalavra")
@@ -87,12 +85,22 @@ async def mostrapalavra(interaction: discord.Interaction):
         await interaction.response.send_message("Você não tem permissões suficientes", ephemeral=True)
 
 @tree.command(name = "escolhepalavra", description="Define manualmente uma palavra para dar timeout")
-async def escolhepalavra(interaction: discord.Interaction, msg: str):
+async def escolhepalavra(interaction: discord.Interaction, novapalavra: str):
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         global palavraMute
-        palavraMute = msg
+        palavraMute = novapalavra
         await interaction.response.send_message(f"{palavraMute} é a nova palavra que dá timeout", ephemeral=True)
         print(f"A palavra escolhida foi definida manualmente e agora é {palavraMute}")
+    else:
+        await interaction.response.send_message("Você não tem permissões suficientes", ephemeral=True)
+
+@tree.command(name = "escolhenumpalavras", description="Define o número de mensagens lidas para redefinir a palavra que da timeout")
+async def escolhenumpalavras(interaction: discord.Interaction, numeropalavras: int):
+    if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
+        global palavrasMax
+        palavrasMax = numeropalavras
+        await interaction.response.send_message(f"Agora o bot vai trocar de palavra a cada {palavrasMax} mensagens", ephemeral=True)
+        print(f"Número de mensagens para trocar a palavra redefinido para {palavrasMax}")
     else:
         await interaction.response.send_message("Você não tem permissões suficientes", ephemeral=True)
 
@@ -111,6 +119,29 @@ async def mantempalavra(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("Você não possui permissões suficientes", ephemeral=True)
 
+# meme command
+@tree.command(name = "mensagemdivina", description="Mensagem dos deuses inspirada no TempleOS")
+async def mensagemdivina(interaction: discord.Interaction, numeropalavras: int):
+    if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
+        fraseAleatoria = ""
+        a = random.randint(0, 10000)
+        for i in range(numeropalavras):
+            a += 1
+            random.seed(a)
+            novaPalavra = None
+            newWord = None
+            while newWord is None or not newWord:
+                novaPalavra = random.choice(alfabeto) + random.choice(alfabeto) + random.choice(alfabeto) + random.choice(alfabeto) + random.choice(alfabeto)
+                for i in range(4):
+                    novaPalavra = novaPalavra.replace(random.choice(alfabeto), "")
+                newWord = dictionary.select(novaPalavra, dictionary.Selector.PREFIX)
+            indexAleatorio = random.randrange(len(newWord))
+            fraseAleatoria = fraseAleatoria + " " + str.lower(newWord[indexAleatorio].text)
+        print(f"Comando mensagemdivina utilizado")
+        await interaction.response.send_message(f"{fraseAleatoria}", ephemeral=False)
+    else:
+        await interaction.response.send_message("Você não tem permissões suficientes", ephemeral=True)
+
 @client.event
 async def on_message(message):
     if client.user.id != message.author.id:
@@ -127,9 +158,12 @@ async def on_message(message):
                 print(f"User {message.author.name} foi mutado")
                 await member.timeout(duration, reason="Falou a palavra proibida do dia")
                 global trocaPalavra
+                global contador
+                contador = 0
                 if trocaPalavra == True:
                     await message.channel.send(f"Parabéns! Você falou a palavra proibida do dia! A palavra é: {palavraMute}\nSeu prêmio é {duration} de Timeout!\nA palavra foi redefinida")
                     await getNewWord()
+                    print(f"Motivo: Falaram a palavra")
                 else:
                     await message.channel.send(f"Parabéns! Você falou a palavra proibida do dia! A palavra é: {palavraMute}\nSeu prêmio é {duration} de Timeout!")
         # ARRUMAR
@@ -142,11 +176,11 @@ async def on_message(message):
                 #await getNewWord()
                 #contador = 0
         else:
-            global contador
+            global palavrasMax
             contador += 1
-            if contador > 100 and trocaPalavra == True:
+            if contador >= palavrasMax and trocaPalavra == True:
                 await getNewWord()
-                print(f"Motivo: atingiu 100 mensagens sem a palavra")
+                print(f"Motivo: atingiu {palavrasMax} mensagens sem a palavra")
                 contador = 0
 
 client.run(TOKEN)
