@@ -1,6 +1,5 @@
 # bot.py
 import os
-import asyncio
 import discord
 import random
 import string
@@ -94,7 +93,7 @@ async def escolhepalavra(interaction: discord.Interaction, novapalavra: str):
     else:
         await interaction.response.send_message("Você não tem permissões suficientes", ephemeral=True)
 
-@tree.command(name = "escolhenumpalavras", description="Define o número de mensagens lidas para redefinir a palavra que da timeout")
+@tree.command(name = "escolhenummensagens", description="Define o número de mensagens lidas para redefinir a palavra que da timeout")
 async def escolhenumpalavras(interaction: discord.Interaction, numeropalavras: int):
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         global palavrasMax
@@ -118,6 +117,25 @@ async def mantempalavra(interaction: discord.Interaction):
             await interaction.response.send_message("Troca de palavra agora está DESLIGADO", ephemeral=True)
     else:
         await interaction.response.send_message("Você não possui permissões suficientes", ephemeral=True)
+
+@tree.command(name = "significado", description="Busca o significado de uma palavra")
+async def significado(interaction: discord.Interaction, palavra: str):
+    if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
+        word = palavra.capitalize()
+        mostraSignificado = dictionary.select(word, dictionary.Selector.PERFECT)
+        if mostraSignificado.meaning != None:
+            await interaction.response.send_message(f"{mostraSignificado.meaning}", ephemeral=False)
+        else:
+            await interaction.response.send_message(f"ERRO: Palavra inválida ou escrita errada (Dica: escreva a palavra com acento)", ephemeral=True)
+    elif interaction.guild_id == int(MENES_SUECOS):
+        word = palavra.capitalize()
+        mostraSignificado = dictionary.select(word, dictionary.Selector.PERFECT)
+        if mostraSignificado.meaning != None:
+            await interaction.response.send_message(f"{mostraSignificado.meaning}", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"ERRO: Palavra inválida ou escrita errada (Dica: escreva a palavra com acento)", ephemeral=True)
+    else:
+        await interaction.response.send_message("Server não permitido", ephemeral=True)
 
 # meme command
 @tree.command(name = "mensagemdivina", description="Mensagem dos deuses inspirada no TempleOS")
@@ -144,6 +162,7 @@ async def mensagemdivina(interaction: discord.Interaction, numeropalavras: int):
 
 @client.event
 async def on_message(message):
+    global palavrasMax
     if client.user.id != message.author.id:
         if palavraMute != None and palavraMute in str.lower(message.content):
             server = client.get_guild(int(MENES_SUECOS))
@@ -166,17 +185,15 @@ async def on_message(message):
                     print(f"Motivo: Falaram a palavra")
                 else:
                     await message.channel.send(f"Parabéns! Você falou a palavra proibida do dia! A palavra é: {palavraMute}\nSeu prêmio é {duration} de Timeout!")
-        # ARRUMAR
         #elif TOJAO in message.content:
             #print(f"tojao pingado")
-            #await message.channel.send(f"nao pinga ele fdp")
-            #global contador
+            #await message.channel.send(f"Mateus 5:48\nPortanto, sejam perfeitos como perfeito é o Pai celestial de vocês.\nnao pingue o tojao.")
             #contador += 1
-            #if contador > 100:
+            #if contador > palavrasMax and trocaPalavra == True:
                 #await getNewWord()
+                #print(f"Motivo: atingiu {palavrasMax} mensagens sem a palavra")
                 #contador = 0
         else:
-            global palavrasMax
             contador += 1
             if contador >= palavrasMax and trocaPalavra == True:
                 await getNewWord()
