@@ -168,14 +168,36 @@ async def mudaconfigpropaganda(interaction: discord.Interaction, numeromsgslidas
 
 # meme command
 @tree.command(name = "enviapropaganda", description="[ADM] Envia uma propaganda no chat")
+async def enviapropaganda(interaction: discord.Interaction, bloqueiachat: bool):
+    if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
+        global opcoes_propaganda, mensagem_block, propaganda
+        random_message, random_file = random.choice(list(opcoes_propaganda.items()))
+        new_msg = await interaction.channel.send(f"{random_message}", file=discord.File(random_file))
+        if bloqueiachat == True:
+            propaganda = 0
+            print(f"Propaganda enviada, bloqueando chat")
+            mensagem_block = new_msg
+            await new_msg.add_reaction("✅")  # Add a "✅" reaction to the message
+            await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False)  # Remove everyone's permissions to send messages in the channel
+        else:
+            print(f"Propaganda enviada")
+            await interaction.response.send_message("Propaganda enviada com sucesso", ephemeral=True)
+    else:
+        await interaction.response.send_message("Você não tem permissões suficientes", ephemeral=True)
+
+# meme command
+@tree.command(name = "desbloqueiachat", description="[ADM] Desbloqueia o chat e reseta propaganda")
 async def enviapropaganda(interaction: discord.Interaction):
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
-        global opcoes_propaganda, mensagem_block
-        random_message, random_file = random.choice(list(opcoes_propaganda.items()))
-        print(f"Propaganda enviada, bloqueando chat")
-        sent_message = await interaction.response.send_message(f"{random_message}", file=discord.File(random_file))
-        mensagem_block = sent_message
-        await sent_message.add_reaction("✅")
+        global mensagem_block
+        if mensagem_block:
+            await mensagem_block.delete()
+            await mensagem_block.channel.set_permissions(mensagem_block.guild.default_role, send_messages=True) 
+            mensagem_block = False
+            print(f"Chat desbloqueado")
+            await interaction.response.send_message("Chat desbloqueado com sucesso", ephemeral=True)
+        else:
+            await interaction.response.send_message("O chat já está desbloqueado", ephemeral=True)
 
 # meme command
 @tree.command(name = "mensagemdivina", description="[ADM] Mensagem dos deuses inspirada no TempleOS")
