@@ -1,0 +1,6 @@
+discord.py==2.3.2
+peewee==3.13.1
+python-dotenv==1.0.1
+Requests==2.32.2
+Unidecode==1.3.7
+python_pt_dictionary @ git+https://github.com/nicolasleao/python-dictionary-pt
