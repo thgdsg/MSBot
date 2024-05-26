@@ -15,9 +15,25 @@ alfabeto = list(string.ascii_lowercase)
 palavraMute = None
 contador = 0
 propaganda = 0
+propaganda_max = 25
+reaction_max = 5
 palavrasMax = 100
 mensagem_block = False
 trocaPalavra = True
+opcoes_propaganda = {
+    "# Entre no melhor servidor de todos! \n<https://discord.gg/gou>" : "images/gou.jpg",
+    "# Não perca! \nPromoções todo dia na <https://amazon.com.br>" : "images/amazon.jpg",
+    "# Nova season de Fortnite em breve! \nBaixe grátis em <https://fortnite.com>" : "images/fortnite.jpg",
+    "# Siga a página nas redes sociais! \n<https://youtube.com/@MENESSUECOSS>\n<https://web.facebook.com/MenesSuecos>\n<https://www.instagram.com/mene.sueco>" : "images/menes_suecos.png",
+    "# Quer aprender a programar? \nAcesse <https://www.codecademy.com> e comece agora!" : "images/codecademy.png",
+    "# Ouçam o novo álbum da Taylor Swift, a rainha do pop! \nhttps://open.spotify.com/album/5H7ixXZfsNMGbIE5OBSpcb?si=AcDe8Oy7QSSNSVN2U170UA" : "images/taylor_swift.jpg",
+    "# Hora de acordar quarentena! \n<@&1194720159416467527> <@&1194723205022232637>" : "images/acorda.png",
+    "# Quer aprender a desenhar? \nAcesse <https://www.skillshare.com> e comece agora!" : "images/skillshare.jpg",
+    "# Crie uma conta na melhor rede social! \n<https://tiktok.com>" : "images/tiktok.png",
+    "# Precisa de um adestrador de cães? Não se preocupe! Sérgio Moro está aqui pra você!\n<https://www.sergiomoro.com.br>" : "images/sergio_moro.jpg",
+    "# Você é furry? Pare imediatamente e busque ajuda! \n<https://www.bible.com/pt>" : "images/psicologo.jpg",
+    "# ليكن الله معك \n<https://www.islamreligion.com>" : "images/islam.jpg"
+}
 # Trocar caso necessário
 TOKEN = os.getenv('DISCORD_TOKEN') # token do bot
 TOJAO = os.getenv('TOJAO') # user id do tojao
@@ -139,6 +155,28 @@ async def significado(interaction: discord.Interaction, palavra: str):
     else:
         await interaction.response.send_message("Server não permitido", ephemeral=True)
 
+@tree.command(name = "mudaconfigpropaganda", description="[ADM] Muda configurações da propaganda")
+async def mudaconfigpropaganda(interaction: discord.Interaction, numeromsgslidas: int, numeroreacoes: int):
+    if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
+        global propaganda_max, reaction_max
+        propaganda_max = numeromsgslidas
+        reaction_max = numeroreacoes
+        await interaction.response.send_message(f"Configurações de propaganda alteradas para {propaganda_max} mensagens lidas e {reaction_max} reações", ephemeral=True)
+        print(f"Configurações de propaganda alteradas para {propaganda_max} mensagens lidas e {reaction_max} reações")
+    else:
+        await interaction.response.send_message("Você não tem permissões suficientes", ephemeral=True)
+
+# meme command
+@tree.command(name = "enviapropaganda", description="[ADM] Envia uma propaganda no chat")
+async def enviapropaganda(interaction: discord.Interaction):
+    if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
+        global opcoes_propaganda, mensagem_block
+        random_message, random_file = random.choice(list(opcoes_propaganda.items()))
+        print(f"Propaganda enviada, bloqueando chat")
+        sent_message = await interaction.response.send_message(f"{random_message}", file=discord.File(random_file))
+        mensagem_block = sent_message
+        await sent_message.add_reaction("✅")
+
 # meme command
 @tree.command(name = "mensagemdivina", description="[ADM] Mensagem dos deuses inspirada no TempleOS")
 async def mensagemdivina(interaction: discord.Interaction, numeropalavras: int):
@@ -164,7 +202,7 @@ async def mensagemdivina(interaction: discord.Interaction, numeropalavras: int):
 
 @client.event
 async def on_message(message):
-    global palavrasMax, propaganda, mensagem_block
+    global palavrasMax, propaganda, mensagem_block, propaganda_max, opcoes_propaganda
     if client.user.id != message.author.id:
         global trocaPalavra, contador
         if palavraMute != None and palavraMute in str.lower(message.content):
@@ -204,18 +242,7 @@ async def on_message(message):
                 await getNewWord()
                 print(f"Motivo: atingiu {palavrasMax} mensagens sem a palavra")
                 contador = 0
-            if propaganda >= 25:
-                opcoes_propaganda = {
-                    "# Entre no melhor servidor de todos! \n<https://discord.gg/gou>" : "images/gou.jpg",
-                    "# Não perca! \nPromoções todo dia na <https://amazon.com.br>" : "images/amazon.jpg",
-                    "# Nova season de Fortnite em breve! \nBaixe grátis em <https://fortnite.com>" : "images/fortnite.jpg",
-                    "# Siga a página nas redes sociais! \n<https://youtube.com/@MENESSUECOSS>\n<https://web.facebook.com/MenesSuecos>\n<https://www.instagram.com/mene.sueco>" : "images/menes_suecos.png",
-                    "# Quer aprender a programar? \nAcesse <https://www.codecademy.com> e comece agora!" : "images/codecademy.png",
-                    "# Ouçam o novo álbum da Taylor Swift, a rainha do pop! \nhttps://open.spotify.com/album/5H7ixXZfsNMGbIE5OBSpcb?si=AcDe8Oy7QSSNSVN2U170UA" : "images/taylor_swift.jpg",
-                    "# Hora de acordar quarentena! \n<@&1194720159416467527> <@&1194723205022232637>" : "images/acorda.png",
-                    "# Quer aprender a desenhar? \nAcesse <https://www.skillshare.com> e comece agora!" : "images/skillshare.jpg",
-                    "# Crie uma conta na melhor rede social! \n<https://tiktok.com>" : "images/tiktok.png"
-                }
+            if propaganda >= propaganda_max:
                 propaganda = 0
                 random_message, random_file = random.choice(list(opcoes_propaganda.items()))
                 print(f"Propaganda enviada, bloqueando chat")
@@ -227,12 +254,12 @@ async def on_message(message):
 
 @client.event
 async def on_reaction_add(reaction, user):
-    global mensagem_block
+    global mensagem_block, reaction_max
     react_message = reaction.message
     if react_message == mensagem_block:
         mensagem_block = await react_message.channel.fetch_message(react_message.id)
         for reaction in mensagem_block.reactions:
-            if reaction.count > 4:
+            if reaction.count >= reaction_max:
                 print(f'Reaction: {reaction.emoji} | Count: {reaction.count} | Deletando mensagem de propaganda e liberando chat')
                 await mensagem_block.delete()
                 await mensagem_block.channel.set_permissions(mensagem_block.guild.default_role, send_messages=True) 
