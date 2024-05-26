@@ -166,6 +166,7 @@ async def mensagemdivina(interaction: discord.Interaction, numeropalavras: int):
 async def on_message(message):
     global palavrasMax, propaganda, mensagem_block
     if client.user.id != message.author.id:
+        global trocaPalavra, contador
         if palavraMute != None and palavraMute in str.lower(message.content):
             server = client.get_guild(int(MENES_SUECOS))
 
@@ -181,8 +182,6 @@ async def on_message(message):
             else:
                 print(f"User {message.author.name} foi mutado")
                 await member.timeout(duration, reason="Falou a palavra proibida do dia")
-                global trocaPalavra
-                global contador
                 contador = 0
                 if trocaPalavra == True:
                     await message.channel.send(f"Parabéns! Você falou a palavra proibida do dia! A palavra é: {palavraMute}\nSeu prêmio é {duration} de Timeout!\nA palavra foi redefinida")
