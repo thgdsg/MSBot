@@ -15,11 +15,12 @@ alfabeto = list(string.ascii_lowercase)
 palavraMute = None
 contador = 0
 propaganda = 0
-propaganda_max = 25
-reaction_max = 5
-palavrasMax = 100
+propaganda_max = 20
+reaction_max = 3
+palavrasMax = 50
 mensagem_block = False
 trocaPalavra = True
+permissoesOriginais = None
 opcoes_propaganda = {
     "# Entre no melhor servidor de todos! \n<https://discord.gg/gou>" : "images/gou.jpg",
     "# Não perca! \nPromoções todo dia na <https://amazon.com.br>" : "images/amazon.jpg",
@@ -32,7 +33,19 @@ opcoes_propaganda = {
     "# Crie uma conta na melhor rede social! \n<https://tiktok.com>" : "images/tiktok.png",
     "# Precisa de um adestrador de cães? Não se preocupe! Sérgio Moro está aqui pra você!\n<https://www.sergiomoro.com.br>" : "images/sergio_moro.jpg",
     "# Você é furry? Pare imediatamente e busque ajuda! \n<https://www.bible.com/pt>" : "images/psicologo.jpg",
-    "# ليكن الله معك \n<https://www.islamreligion.com>" : "images/islam.jpg"
+    "# ليكن الله معك \n<https://www.islamreligion.com>" : "images/islam.jpg",
+    "# O jogo do tigrinho tá bugado e pagando muito! \nEntre no meu link em <https://discord.gg/gou>" : "images/tigrinho.png",
+    "# hagi łagi idzie po ciebie..." : "images/huggywuggy.jpg",
+    "# Seja legal com seus amiguinhos!" : "images/brothers.jpg",
+    "# O melhor jogo mobile e para computador dos últimos tempos! \nJogue RAID: Shadow Legends no meu link e inicie com 10000 de ouro! <https://store.steampowered.com/app/2333480/RAID_Shadow_Legends/>" : "images/raid.jpg",
+    "# World of Tanks é o jogo mais fiel de tanque do mercado! \nEntre no meu link e ganhe 3 tanques por tempo limitado! <https://worldoftanks.com/pt-br/>" : "images/wot.jpg",
+    "# Ajude tribos pequenas africanas a recuperarem sua economia! \nTodo centavo ajuda: <https://www.youtube.com/@SsethTzeentach>" : "images/sseth.jpg",
+    "# Did you know that the critically acclaimed MMORPG Final Fantasy XIV has a free trial, and includes the entirety of A Realm Reborn AND the award-winning Stormblood expansion up to level 70 with no restrictions on playtime? \nSign up, and enjoy Eorzea today! <https://store.steampowered.com/app/39210/FINAL_FANTASY_XIV_Online/>" : "images/ffxiv.jpg",
+    "# O jogo Subway Money está dando muitos ganhos! \nEntre no meu link e comece com R$5.00 de bônus! <https://discord.gg/gou>" : "images/subway.mp4",
+    "# Have you seen this man in your dreams? \nHe will be in your dreams tonight." : "images/johnmers.png",
+    "# Curta Menes Suecos no Facebook!" : "images/swedish.png",
+    "# Não assine a TIM! \nEles são ruins e não prestam! 😠😠" : "images/tim.jpg",
+    "# Vi sitter här i Venten och spelar lite Dota \n<https://www.dota2.com/home>" : "images/dota.jpg"
 }
 # Trocar caso necessário
 TOKEN = os.getenv('DISCORD_TOKEN') # token do bot
@@ -68,6 +81,50 @@ async def getNewWord():
     palavraMute = str.lower(newWord[indexAleatorio].text)
     print(f"Palavra foi trocada para: {palavraMute}")
 
+# Subrotina para enviar uma propaganda no chat
+async def sendAd(message, bloqueiachat, escolha = None, interaction = None):
+    global propaganda, mensagem_block, opcoes_propaganda, permissoesOriginais
+    if interaction:
+        if mensagem_block:
+            await mensagem_block.delete()
+            await mensagem_block.channel.set_permissions(mensagem_block.guild.default_role, overwrite=permissoesOriginais)
+            permissoesOriginais = None 
+            mensagem_block = False
+        if escolha == None:
+                random_message, random_file = random.choice(list(opcoes_propaganda.items()))
+        else:
+            try:
+                position = escolha - 1
+                random_message, random_file = list(opcoes_propaganda.items())[position]
+            except IndexError:
+                random_message, random_file = random.choice(list(opcoes_propaganda.items()))
+        sent_message = await interaction.channel.send(f"{random_message}", file=discord.File(random_file))
+        if bloqueiachat == True:
+            propaganda = 0
+            print(f"Propaganda enviada, bloqueando chat")
+            mensagem_block = sent_message
+            permissoesOriginais = interaction.channel.overwrites_for(interaction.guild.default_role)
+            await sent_message.add_reaction("✅")  # Add a "✅" reaction to the message
+            await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False)  # Remove everyone's permissions to send messages in the channel
+            await interaction.response.send_message("Propaganda enviada, bloqueando o chat", ephemeral=True)
+        else:
+            await interaction.response.send_message("Propaganda enviada", ephemeral=True)
+    else:
+        if mensagem_block:
+            await mensagem_block.delete()
+            await mensagem_block.channel.set_permissions(mensagem_block.guild.default_role, overwrite=permissoesOriginais)
+            permissoesOriginais = None 
+            mensagem_block = False
+            
+        random_message, random_file = random.choice(list(opcoes_propaganda.items()))
+        sent_message = await message.channel.send(f"{random_message}", file=discord.File(random_file))
+        propaganda = 0
+        print(f"Propaganda enviada, bloqueando chat")
+        mensagem_block = sent_message
+        permissoesOriginais = message.channel.overwrites_for(message.guild.default_role)
+        await sent_message.add_reaction("✅")  # Add a "✅" reaction to the message
+        await message.channel.set_permissions(message.guild.default_role, send_messages=False)  # Remove everyone's permissions to send messages in the channel
+
 @tree.command(name = "novapalavra", description="[ADM] Busca uma nova palavra aleatória no dicionário")
 async def novapalavra(interaction: discord.Interaction):
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
@@ -85,7 +142,7 @@ async def redefinepalavra(interaction: discord.Interaction):
         global palavraMute
         palavraMute = None
         print("A palavra escolhida foi redefinida\n Motivo: comando redefinepalavra")
-        await interaction.response.send_message("palavraMute foi redefinida (Use o comando /palavra novamente)", ephemeral=True)
+        await interaction.response.send_message("palavraMute foi redefinida (Use o comando /novapalavra novamente)", ephemeral=True)
     else:
         await interaction.response.send_message("Você não tem permissões suficientes", ephemeral=True)
 
@@ -112,7 +169,7 @@ async def escolhepalavra(interaction: discord.Interaction, novapalavra: str):
         await interaction.response.send_message("Você não tem permissões suficientes", ephemeral=True)
 
 @tree.command(name = "escolhenummensagens", description="[ADM] Define o número de mensagens lidas para redefinir a palavra que da timeout")
-async def escolhenumpalavras(interaction: discord.Interaction, numeromensagens: int):
+async def escolhenummensagens(interaction: discord.Interaction, numeromensagens: int):
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         global palavrasMax
         palavrasMax = numeromensagens
@@ -168,26 +225,12 @@ async def mudaconfigpropaganda(interaction: discord.Interaction, numeromsgslidas
 
 # meme command
 @tree.command(name = "enviapropaganda", description="[ADM] Envia uma propaganda no chat")
-async def enviapropaganda(interaction: discord.Interaction, bloqueiachat: bool):
+async def enviapropaganda(interaction: discord.Interaction, bloqueiachat: bool, escolha: int = None):
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
-        global opcoes_propaganda, mensagem_block, propaganda
-        random_message, random_file = random.choice(list(opcoes_propaganda.items()))
-        new_msg = await interaction.channel.send(f"{random_message}", file=discord.File(random_file))
-        if bloqueiachat == True:
-            propaganda = 0
-            print(f"Propaganda enviada, bloqueando chat")
-            mensagem_block = new_msg
-            await new_msg.add_reaction("✅")  # Add a "✅" reaction to the message
-            await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False)  # Remove everyone's permissions to send messages in the channel
-        else:
-            print(f"Propaganda enviada")
-            await interaction.response.send_message("Propaganda enviada com sucesso", ephemeral=True)
-    else:
-        await interaction.response.send_message("Você não tem permissões suficientes", ephemeral=True)
+        await sendAd(None, bloqueiachat, escolha, interaction)
 
-# meme command
 @tree.command(name = "desbloqueiachat", description="[ADM] Desbloqueia o chat e reseta propaganda")
-async def enviapropaganda(interaction: discord.Interaction):
+async def desbloqueiachat(interaction: discord.Interaction):
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         global mensagem_block
         if mensagem_block:
@@ -198,6 +241,16 @@ async def enviapropaganda(interaction: discord.Interaction):
             await interaction.response.send_message("Chat desbloqueado com sucesso", ephemeral=True)
         else:
             await interaction.response.send_message("O chat já está desbloqueado", ephemeral=True)
+
+@tree.command(name = "bloqueiachat", description="[ADM] Bloqueia o chat")
+async def bloqueiachat(interaction: discord.Interaction):
+    if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
+        if interaction.channel.permissions_for(interaction.guild.default_role).send_messages == True:
+            await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False) 
+            print(f"Chat bloqueado")
+            await interaction.response.send_message("Chat bloqueado com sucesso", ephemeral=True)
+        else:
+            await interaction.response.send_message("O chat já está bloqueado", ephemeral=True)
 
 # meme command
 @tree.command(name = "mensagemdivina", description="[ADM] Mensagem dos deuses inspirada no TempleOS")
@@ -224,7 +277,7 @@ async def mensagemdivina(interaction: discord.Interaction, numeropalavras: int):
 
 @client.event
 async def on_message(message):
-    global palavrasMax, propaganda, mensagem_block, propaganda_max, opcoes_propaganda
+    global palavrasMax, propaganda, mensagem_block, propaganda_max, opcoes_propaganda, permissoesOriginais
     if client.user.id != message.author.id:
         global trocaPalavra, contador
         if palavraMute != None and palavraMute in str.lower(message.content):
@@ -249,14 +302,6 @@ async def on_message(message):
                     print(f"Motivo: Falaram a palavra proibida")
                 else:
                     await message.channel.send(f"Parabéns! Você falou a palavra proibida do dia! A palavra é: {palavraMute}\nSeu prêmio é {duration} de Timeout!")
-        #elif TOJAO in message.content:
-            #print(f"tojao pingado")
-            #await message.channel.send(f"Mateus 5:48\nPortanto, sejam perfeitos como perfeito é o Pai celestial de vocês.\nnao pingue o tojao.")
-            #contador += 1
-            #if contador > palavrasMax and trocaPalavra == True:
-                #await getNewWord()
-                #print(f"Motivo: atingiu {palavrasMax} mensagens sem a palavra")
-                #contador = 0
         else:
             contador += 1
             propaganda += 1
@@ -265,18 +310,12 @@ async def on_message(message):
                 print(f"Motivo: atingiu {palavrasMax} mensagens sem a palavra")
                 contador = 0
             if propaganda >= propaganda_max:
-                propaganda = 0
-                random_message, random_file = random.choice(list(opcoes_propaganda.items()))
-                print(f"Propaganda enviada, bloqueando chat")
-                sent_message = await message.channel.send(f"{random_message}", file=discord.File(random_file))
-                mensagem_block = sent_message
-                await sent_message.add_reaction("✅")  # Add a "✅" reaction to the message
-                await message.channel.set_permissions(message.guild.default_role, send_messages=False)  # Remove everyone's permissions to send messages in the channel
+                await sendAd(message, True)
 
 
 @client.event
 async def on_reaction_add(reaction, user):
-    global mensagem_block, reaction_max
+    global mensagem_block, reaction_max, permissoesOriginais
     react_message = reaction.message
     if react_message == mensagem_block:
         mensagem_block = await react_message.channel.fetch_message(react_message.id)
@@ -284,7 +323,8 @@ async def on_reaction_add(reaction, user):
             if reaction.count >= reaction_max:
                 print(f'Reaction: {reaction.emoji} | Count: {reaction.count} | Deletando mensagem de propaganda e liberando chat')
                 await mensagem_block.delete()
-                await mensagem_block.channel.set_permissions(mensagem_block.guild.default_role, send_messages=True) 
+                await mensagem_block.channel.set_permissions(mensagem_block.guild.default_role, overwrite=permissoesOriginais)
+                permissoesOriginais = None 
                 mensagem_block = False
                 break
     else:
