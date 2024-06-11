@@ -4,23 +4,28 @@ import discord
 import random
 import string
 
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from python_pt_dictionary import dictionary
 from dotenv import load_dotenv
 import discord
 from discord import app_commands
+from discord.ext import tasks
+import asyncio
 
 load_dotenv()
+# Variáveis globais
 alfabeto = list(string.ascii_lowercase)
 palavraMute = None
 contador = 0
 propaganda = 0
-propaganda_max = 20
+propaganda_max = 50
 reaction_max = 3
 palavrasMax = 50
 mensagem_block = False
 trocaPalavra = True
 permissoesOriginais = None
+flagFirst = True
+lock = asyncio.Lock()
 opcoes_propaganda = {
     "# Entre no melhor servidor de todos! \n<https://discord.gg/gou>" : "images/gou.jpg",
     "# Não perca! \nPromoções todo dia na <https://amazon.com.br>" : "images/amazon.jpg",
@@ -47,6 +52,7 @@ opcoes_propaganda = {
     "# Não assine a TIM! \nEles são ruins e não prestam! 😠😠" : "images/tim.jpg",
     "# Vi sitter här i Venten och spelar lite Dota \n<https://www.dota2.com/home>" : "images/dota.jpg"
 }
+
 # Trocar caso necessário
 TOKEN = os.getenv('DISCORD_TOKEN') # token do bot
 TOJAO = os.getenv('TOJAO') # user id do tojao
@@ -63,6 +69,32 @@ class aclient(discord.Client):
             await tree.sync()
             self.synced = True
         print("Connected to Discord")
+        self.reset_flag.start()  # Start the background task
+
+    @tasks.loop(hours=24)
+    async def reset_flag(self):
+        # This runs every 24 hours
+        print("Meia-noite, resetando variável flagFirst e tirando o cargo do membro que tiver o cargo 'first'")
+        global flagFirst
+        flagFirst = False
+        guild = self.get_guild(int(MENES_SUECOS))  # Get the guild by its ID
+        if guild is not None:
+            role = discord.utils.get(guild.roles, name="first")  # Get the role
+            if role is not None:
+                for member in guild.members:  # Iterate over all members
+                    if role in member.roles:  # If the member has the role
+                        print(f"Someone has the {role.name} role. Removing the role from {member.name}")
+                        await member.remove_roles(role)  # Remove the role
+
+    @reset_flag.before_loop
+    async def before_reset_flag(self):
+        # Wait until midnight
+        now = datetime.now()
+        midnight = datetime.combine(now + timedelta(days=1), time(0, 0))
+        print("Loop pronto, esperando até meia-noite")
+        await discord.utils.sleep_until(midnight)
+
+
 
 client = aclient()
 tree = app_commands.CommandTree(client)
@@ -82,7 +114,7 @@ async def getNewWord():
     print(f"Palavra foi trocada para: {palavraMute}")
 
 # Subrotina para enviar uma propaganda no chat
-async def sendAd(message, bloqueiachat, escolha = None, interaction = None):
+async def sendAd(message, bloqueiachat, escolha = None, interaction = False):
     global propaganda, mensagem_block, opcoes_propaganda, permissoesOriginais
     if interaction:
         if mensagem_block:
@@ -115,7 +147,7 @@ async def sendAd(message, bloqueiachat, escolha = None, interaction = None):
             await mensagem_block.channel.set_permissions(mensagem_block.guild.default_role, overwrite=permissoesOriginais)
             permissoesOriginais = None 
             mensagem_block = False
-            
+
         random_message, random_file = random.choice(list(opcoes_propaganda.items()))
         sent_message = await message.channel.send(f"{random_message}", file=discord.File(random_file))
         propaganda = 0
@@ -277,40 +309,49 @@ async def mensagemdivina(interaction: discord.Interaction, numeropalavras: int):
 
 @client.event
 async def on_message(message):
-    global palavrasMax, propaganda, mensagem_block, propaganda_max, opcoes_propaganda, permissoesOriginais
-    if client.user.id != message.author.id:
-        global trocaPalavra, contador
-        if palavraMute != None and palavraMute in str.lower(message.content):
-            server = client.get_guild(int(MENES_SUECOS))
+    global palavrasMax, propaganda, mensagem_block, propaganda_max, opcoes_propaganda, permissoesOriginais, flagFirst, trocaPalavra, contador
+    async with lock:
+        if client.user.id != message.author.id:
+            if palavraMute != None and palavraMute in str.lower(message.content):
+                server = client.get_guild(int(MENES_SUECOS))
 
-            member = await server.fetch_member(message.author.id)
+                member = await server.fetch_member(message.author.id)
 
-            duration = timedelta(days = 0, hours = 0, minutes = 5, seconds = 0)
-            if member.guild_permissions.moderate_members:
-                print(f"User {message.author.name} com permissão de ADM falou a palavra proibida")
-                await message.channel.send(f"Sem graça, o ADM falou a palavra proibida...")
-                if trocaPalavra == True:
-                    await getNewWord()
-                    print(f"Motivo: Falaram a palavra proibida")
-            else:
-                print(f"User {message.author.name} foi mutado")
-                await member.timeout(duration, reason="Falou a palavra proibida do dia")
-                contador = 0
-                if trocaPalavra == True:
-                    await message.channel.send(f"Parabéns! Você falou a palavra proibida do dia! A palavra é: {palavraMute}\nSeu prêmio é {duration} de Timeout!\nA palavra foi redefinida")
-                    await getNewWord()
-                    print(f"Motivo: Falaram a palavra proibida")
+                duration = timedelta(days = 0, hours = 0, minutes = 5, seconds = 0)
+                if member.guild_permissions.moderate_members:
+                    print(f"User {message.author.name} com permissão de ADM falou a palavra proibida")
+                    await message.channel.send(f"Sem graça, o ADM falou a palavra proibida...")
+                    if trocaPalavra == True:
+                        await getNewWord()
+                        print(f"Motivo: Falaram a palavra proibida")
                 else:
-                    await message.channel.send(f"Parabéns! Você falou a palavra proibida do dia! A palavra é: {palavraMute}\nSeu prêmio é {duration} de Timeout!")
-        else:
-            contador += 1
-            propaganda += 1
-            if contador >= palavrasMax and trocaPalavra == True:
-                await getNewWord()
-                print(f"Motivo: atingiu {palavrasMax} mensagens sem a palavra")
-                contador = 0
-            if propaganda >= propaganda_max:
-                await sendAd(message, True)
+                    print(f"User {message.author.name} foi mutado")
+                    await member.timeout(duration, reason="Falou a palavra proibida")
+                    contador = 0
+                    if trocaPalavra == True:
+                        await message.channel.send(f"Parabéns! Você falou a palavra proibida! A palavra é: {palavraMute}\nSeu prêmio é {duration} de Timeout!\nA palavra foi redefinida")
+                        await getNewWord()
+                        print(f"Motivo: Falaram a palavra proibida")
+                    else:
+                        await message.channel.send(f"Parabéns! Você falou a palavra proibida! A palavra é: {palavraMute}\nSeu prêmio é {duration} de Timeout!")
+            else:
+                contador += 1
+                propaganda += 1
+                if contador >= palavrasMax and trocaPalavra == True:
+                    await getNewWord()
+                    print(f"Motivo: atingiu {palavrasMax} mensagens sem a palavra")
+                    contador = 0
+                if propaganda >= propaganda_max:
+                    await sendAd(message, True)
+            if flagFirst == False and "first" in str.lower(message.content):
+                # Get the role
+                role = discord.utils.get(message.guild.roles, name="first")  # Replace with your role name
+                # Give the role to the user who sent the message
+                if role is not None:
+                    await message.author.add_roles(role)
+                    await message.channel.send(f"Parabéns {message.author.mention}, você é o primeiro a falar 'first' hoje!")
+                    flagFirst = True
+                    print(f"No one has the {role.name} role.\n{message.author} has been given the {role.name} role.")
 
 
 @client.event
