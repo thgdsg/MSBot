@@ -26,6 +26,7 @@ trocaPalavra = True
 permissoesOriginais = None
 flagFirst = True
 lock = asyncio.Lock()
+ignorar_omd = False
 opcoes_propaganda = {
     "# Entre no melhor servidor de todos! \n<https://discord.gg/gou>" : "images/gou.jpg",
     "# Não perca! \nPromoções todo dia na <https://amazon.com.br>" : "images/amazon.jpg",
@@ -51,6 +52,7 @@ opcoes_propaganda = {
     "# Curta Menes Suecos no Facebook!" : "images/swedish.png",
     "# Não assine a TIM! \nEles são ruins e não prestam! 😠😠" : "images/tim.jpg",
     "# Vi sitter här i Venten och spelar lite Dota \n<https://www.dota2.com/home>" : "images/dota.jpg"
+    # total de 24 propagandas
 }
 
 # Trocar caso necessário
@@ -68,27 +70,29 @@ class aclient(discord.Client):
         if not self.synced:
             await tree.sync()
             self.synced = True
-        print("Connected to Discord")
-        self.reset_flag.start()  # Start the background task
+        print("Conectado ao Discord")
+        self.reset_flag.start()  # Inicia o loop pra resetar a flag
 
     @tasks.loop(hours=24)
     async def reset_flag(self):
-        # This runs every 24 hours
+        # Roda meia-noite 00:00
         print("Meia-noite, resetando variável flagFirst e tirando o cargo do membro que tiver o cargo 'first'")
         global flagFirst
         flagFirst = False
-        guild = self.get_guild(int(MENES_SUECOS))  # Get the guild by its ID
+        guild = self.get_guild(int(MENES_SUECOS))  
         if guild is not None:
-            role = discord.utils.get(guild.roles, name="first")  # Get the role
+            role = discord.utils.get(guild.roles, name="first") 
             if role is not None:
-                for member in guild.members:  # Iterate over all members
-                    if role in member.roles:  # If the member has the role
+                # Tira o cargo 'first' de todos os membros que possuem (idealmente só 1)
+                for member in guild.members:  
+                    if role in member.roles:  
                         print(f"Someone has the {role.name} role. Removing the role from {member.name}")
-                        await member.remove_roles(role)  # Remove the role
+                        await member.remove_roles(role)  
+                        break
 
     @reset_flag.before_loop
     async def before_reset_flag(self):
-        # Wait until midnight
+        # Espera até meia-noite
         now = datetime.now()
         midnight = datetime.combine(now + timedelta(days=1), time(0, 0))
         print("Loop pronto, esperando até meia-noite")
@@ -114,11 +118,14 @@ async def getNewWord():
     print(f"Palavra foi trocada para: {palavraMute}")
 
 # Subrotina para enviar uma propaganda no chat
+# Default: recebe uma mensagem e True no bloqueiachat, mas funciona também com uma interação (comando)
 async def sendAd(message, bloqueiachat, escolha = None, interaction = False):
-    global propaganda, mensagem_block, opcoes_propaganda, permissoesOriginais
+    global propaganda, mensagem_block, opcoes_propaganda, permissoesOriginais, ignorar_omd
     if interaction:
         if mensagem_block:
+            ignorar_omd = True
             await mensagem_block.delete()
+            ignorar_omd = False
             await mensagem_block.channel.set_permissions(mensagem_block.guild.default_role, overwrite=permissoesOriginais)
             permissoesOriginais = None 
             mensagem_block = False
@@ -136,14 +143,16 @@ async def sendAd(message, bloqueiachat, escolha = None, interaction = False):
             print(f"Propaganda enviada, bloqueando chat")
             mensagem_block = sent_message
             permissoesOriginais = interaction.channel.overwrites_for(interaction.guild.default_role)
-            await sent_message.add_reaction("✅")  # Add a "✅" reaction to the message
+            await sent_message.add_reaction("✅")  # "✅" reaction
             await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False)  # Remove everyone's permissions to send messages in the channel
             await interaction.response.send_message("Propaganda enviada, bloqueando o chat", ephemeral=True)
         else:
             await interaction.response.send_message("Propaganda enviada", ephemeral=True)
     else:
         if mensagem_block:
+            ignorar_omd = True
             await mensagem_block.delete()
+            ignorar_omd = False
             await mensagem_block.channel.set_permissions(mensagem_block.guild.default_role, overwrite=permissoesOriginais)
             permissoesOriginais = None 
             mensagem_block = False
@@ -154,10 +163,14 @@ async def sendAd(message, bloqueiachat, escolha = None, interaction = False):
         print(f"Propaganda enviada, bloqueando chat")
         mensagem_block = sent_message
         permissoesOriginais = message.channel.overwrites_for(message.guild.default_role)
-        await sent_message.add_reaction("✅")  # Add a "✅" reaction to the message
+        await sent_message.add_reaction("✅")  # "✅" reaction
         await message.channel.set_permissions(message.guild.default_role, send_messages=False)  # Remove everyone's permissions to send messages in the channel
 
-@tree.command(name = "novapalavra", description="[ADM] Busca uma nova palavra aleatória no dicionário")
+##################################
+# COMANDOS DA PALAVRA ALEATÓRIA
+##################################
+
+@tree.command(name = "novapalavra", description="[ADM] Torna uma nova palavra aleatória a palavra proibida")
 async def novapalavra(interaction: discord.Interaction):
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         global contador
@@ -244,6 +257,10 @@ async def significado(interaction: discord.Interaction, palavra: str):
     else:
         await interaction.response.send_message("Server não permitido", ephemeral=True)
 
+##################################
+# COMANDOS DE PROPAGANDA
+##################################
+
 @tree.command(name = "mudaconfigpropaganda", description="[ADM] Muda configurações da propaganda")
 async def mudaconfigpropaganda(interaction: discord.Interaction, numeromsgslidas: int, numeroreacoes: int):
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
@@ -255,7 +272,6 @@ async def mudaconfigpropaganda(interaction: discord.Interaction, numeromsgslidas
     else:
         await interaction.response.send_message("Você não tem permissões suficientes", ephemeral=True)
 
-# meme command
 @tree.command(name = "enviapropaganda", description="[ADM] Envia uma propaganda no chat")
 async def enviapropaganda(interaction: discord.Interaction, bloqueiachat: bool, escolha: int = None):
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
@@ -264,13 +280,19 @@ async def enviapropaganda(interaction: discord.Interaction, bloqueiachat: bool, 
 @tree.command(name = "desbloqueiachat", description="[ADM] Desbloqueia o chat e reseta propaganda")
 async def desbloqueiachat(interaction: discord.Interaction):
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
-        global mensagem_block
+        global mensagem_block, permissoesOriginais, ignorar_omd
         if mensagem_block:
+            ignorar_omd = True
             await mensagem_block.delete()
-            await mensagem_block.channel.set_permissions(mensagem_block.guild.default_role, send_messages=True) 
-            mensagem_block = False
+            ignorar_omd = False
+            if permissoesOriginais != None:
+                await mensagem_block.channel.set_permissions(mensagem_block.guild.default_role, overwrite=permissoesOriginais)
+                permissoesOriginais = None 
             print(f"Chat desbloqueado")
+            mensagem_block = False
             await interaction.response.send_message("Chat desbloqueado com sucesso", ephemeral=True)
+        elif interaction.channel.permissions_for(interaction.guild.default_role).send_messages == False:
+            await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=True)
         else:
             await interaction.response.send_message("O chat já está desbloqueado", ephemeral=True)
 
@@ -310,66 +332,87 @@ async def mensagemdivina(interaction: discord.Interaction, numeropalavras: int):
 @client.event
 async def on_message(message):
     global palavrasMax, propaganda, mensagem_block, propaganda_max, opcoes_propaganda, permissoesOriginais, flagFirst, trocaPalavra, contador
-    async with lock:
-        if client.user.id != message.author.id:
-            if palavraMute != None and palavraMute in str.lower(message.content):
-                server = client.get_guild(int(MENES_SUECOS))
+    if client.user.id != message.author.id:
+        if palavraMute != None and palavraMute in str.lower(message.content):
+            server = client.get_guild(int(MENES_SUECOS))
 
-                member = await server.fetch_member(message.author.id)
+            member = await server.fetch_member(message.author.id)
 
-                duration = timedelta(days = 0, hours = 0, minutes = 5, seconds = 0)
-                if member.guild_permissions.moderate_members:
-                    print(f"User {message.author.name} com permissão de ADM falou a palavra proibida")
-                    await message.channel.send(f"Sem graça, o ADM falou a palavra proibida...")
-                    if trocaPalavra == True:
-                        await getNewWord()
-                        print(f"Motivo: Falaram a palavra proibida")
-                else:
-                    print(f"User {message.author.name} foi mutado")
-                    await member.timeout(duration, reason="Falou a palavra proibida")
-                    contador = 0
-                    if trocaPalavra == True:
-                        await message.channel.send(f"Parabéns! Você falou a palavra proibida! A palavra é: {palavraMute}\nSeu prêmio é {duration} de Timeout!\nA palavra foi redefinida")
-                        await getNewWord()
-                        print(f"Motivo: Falaram a palavra proibida")
-                    else:
-                        await message.channel.send(f"Parabéns! Você falou a palavra proibida! A palavra é: {palavraMute}\nSeu prêmio é {duration} de Timeout!")
-            else:
-                contador += 1
-                propaganda += 1
-                if contador >= palavrasMax and trocaPalavra == True:
+            duration = timedelta(days = 0, hours = 0, minutes = 5, seconds = 0)
+            if member.guild_permissions.moderate_members:
+                print(f"User {message.author.name} com permissão de ADM falou a palavra proibida")
+                await message.channel.send(f"Sem graça, o ADM falou a palavra proibida...")
+                if trocaPalavra == True:
                     await getNewWord()
-                    print(f"Motivo: atingiu {palavrasMax} mensagens sem a palavra")
-                    contador = 0
-                if propaganda >= propaganda_max:
-                    await sendAd(message, True)
+                    print(f"Motivo: Falaram a palavra proibida")
+            else:
+                print(f"User {message.author.name} foi mutado")
+                await member.timeout(duration, reason="Falou a palavra proibida")
+                contador = 0
+                if trocaPalavra == True:
+                    await message.channel.send(f"Parabéns! Você falou a palavra proibida! A palavra é: {palavraMute}\nSeu prêmio é {duration} de Timeout!\nA palavra foi redefinida")
+                    await getNewWord()
+                    print(f"Motivo: Falaram a palavra proibida")
+                else:
+                    await message.channel.send(f"Parabéns! Você falou a palavra proibida! A palavra é: {palavraMute}\nSeu prêmio é {duration} de Timeout!")
+        else:
+            contador += 1
+            propaganda += 1
+            if contador >= palavrasMax and trocaPalavra == True:
+                await getNewWord()
+                print(f"Motivo: atingiu {palavrasMax} mensagens sem a palavra")
+                contador = 0
+            if propaganda >= propaganda_max:
+                if isinstance(message.channel, discord.Thread):
+                    return
+                await sendAd(message, True)
+        async with lock:
             if flagFirst == False and "first" in str.lower(message.content):
                 # Get the role
                 role = discord.utils.get(message.guild.roles, name="first")  # Replace with your role name
                 # Give the role to the user who sent the message
                 if role is not None:
                     await message.author.add_roles(role)
-                    await message.channel.send(f"Parabéns {message.author.mention}, você é o primeiro a falar 'first' hoje!")
+                    await message.channel.send(f"Parabéns {message.author.mention}, você foi o primeiro a falar 'first' hoje!")
                     flagFirst = True
-                    print(f"No one has the {role.name} role.\n{message.author} has been given the {role.name} role.")
-
+                    print(f"Ninguém tem o cargo {role.name}.\nO cargo {role.name} foi dado para {message.author}.")
+        if message.mentions:
+            for member in message.mentions:
+                if member.id == int(TOJAO) and member.guild_permissions.moderate_members == False:
+                    duration = timedelta(days = 0, hours = 0, minutes = 1, seconds = 0)
+                    await member.timeout(duration, reason="Pingou o Tojão...")
+                    await message.channel.send("NÃO. PINGUE. O. TOJÃO.")
 
 @client.event
 async def on_reaction_add(reaction, user):
-    global mensagem_block, reaction_max, permissoesOriginais
+    global mensagem_block, reaction_max, permissoesOriginais, ignorar_omd
     react_message = reaction.message
     if react_message == mensagem_block:
         mensagem_block = await react_message.channel.fetch_message(react_message.id)
         for reaction in mensagem_block.reactions:
             if reaction.count >= reaction_max:
                 print(f'Reaction: {reaction.emoji} | Count: {reaction.count} | Deletando mensagem de propaganda e liberando chat')
+                ignorar_omd = True
                 await mensagem_block.delete()
+                ignorar_omd = False
                 await mensagem_block.channel.set_permissions(mensagem_block.guild.default_role, overwrite=permissoesOriginais)
                 permissoesOriginais = None 
                 mensagem_block = False
                 break
-    else:
-        pass
+
+@client.event
+async def on_message_delete(message):
+    global mensagem_block, permissoesOriginais, ignorar_omd
+    if ignorar_omd:
+        return
+    if mensagem_block:
+        if message.author == client.user and message == mensagem_block:
+            if permissoesOriginais != None:
+                await mensagem_block.channel.set_permissions(mensagem_block.guild.default_role, overwrite=permissoesOriginais)
+                permissoesOriginais = None 
+                print(f"Chat desbloqueado")
+            mensagem_block = False
+            print("A mensagem que bloqueia o canal foi deletada, resetando permissões")
 
 client.run(TOKEN)
 
