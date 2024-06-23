@@ -8,6 +8,7 @@
 4. A primeira pessoa que fala "first" no dia recebe um cargo especial, retirado meia-noite do dia seguinte
 
 ### Guia para uso
+0. Baixar todos os requirements, colocar pasta python_pt_dictionary dentro da pasta do bot
 1. Alterar dicionário opcoes_propaganda
 2. Criar ".env" com token do discord e ID do server
 3. Ao inicializar o bot, rodar o comando /novapalavra
