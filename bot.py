@@ -9,10 +9,10 @@ import pytz
 from datetime import datetime, time, timedelta
 from python_pt_dictionary import dictionary
 from dotenv import load_dotenv
-import discord
-from discord import app_commands
 from discord.ext import tasks
+from discord import app_commands
 import asyncio
+import json
 
 load_dotenv()
 # Variáveis globais
@@ -28,34 +28,37 @@ trocaPalavra = True
 permissoesOriginais = None
 flagFirst = True
 lock = asyncio.Lock()
+log_lock = asyncio.Lock()
 ignorar_omd = False
-opcoes_propaganda = {
-    "# Entre no melhor servidor de todos! \n<https://discord.gg/gou>" : "images/gou.jpg",
-    "# Não perca! \nPromoções todo dia na <https://amazon.com.br>" : "images/amazon.jpg",
-    "# Nova season de Fortnite em breve! \nBaixe grátis em <https://fortnite.com>" : "images/fortnite.jpg",
-    "# Siga a página nas redes sociais! \n<https://youtube.com/@MENESSUECOSS>\n<https://web.facebook.com/MenesSuecos>\n<https://www.instagram.com/mene.sueco>" : "images/menes_suecos.png",
-    "# Quer aprender a programar? \nAcesse <https://www.codecademy.com> e comece agora!" : "images/codecademy.png",
-    "# Ouçam o novo álbum da Taylor Swift, a rainha do pop! \nhttps://open.spotify.com/album/5H7ixXZfsNMGbIE5OBSpcb?si=AcDe8Oy7QSSNSVN2U170UA" : "images/taylor_swift.jpg",
-    "# Hora de acordar quarentena! \n<@&1194720159416467527> <@&1194723205022232637>" : "images/acorda.png",
-    "# Quer aprender a desenhar? \nAcesse <https://www.skillshare.com> e comece agora!" : "images/skillshare.jpg",
-    "# Crie uma conta na melhor rede social! \n<https://tiktok.com>" : "images/tiktok.png",
-    "# Precisa de um adestrador de cães? Não se preocupe! Sérgio Moro está aqui pra você!\n<https://www.sergiomoro.com.br>" : "images/sergio_moro.jpg",
-    "# Você é furry? Pare imediatamente e busque ajuda! \n<https://www.bible.com/pt>" : "images/psicologo.jpg",
-    "# ليكن الله معك \n<https://www.islamreligion.com>" : "images/islam.jpg",
-    "# O jogo do tigrinho tá bugado e pagando muito! \nEntre no meu link em <https://discord.gg/gou>" : "images/tigrinho.png",
-    "# hagi łagi idzie po ciebie..." : "images/huggywuggy.jpg",
-    "# Seja legal com seus amiguinhos!" : "images/brothers.jpg",
-    "# O melhor jogo mobile e para computador dos últimos tempos! \nJogue RAID: Shadow Legends no meu link e inicie com 10000 de ouro! <https://store.steampowered.com/app/2333480/RAID_Shadow_Legends/>" : "images/raid.jpg",
-    "# World of Tanks é o jogo mais fiel de tanque do mercado! \nEntre no meu link e ganhe 3 tanques por tempo limitado! <https://worldoftanks.com/pt-br/>" : "images/wot.jpg",
-    "# Ajude tribos pequenas africanas a recuperarem sua economia! \nTodo centavo ajuda: <https://www.youtube.com/@SsethTzeentach>" : "images/sseth.jpg",
-    "# Did you know that the critically acclaimed MMORPG Final Fantasy XIV has a free trial, and includes the entirety of A Realm Reborn AND the award-winning Stormblood expansion up to level 70 with no restrictions on playtime? \nSign up, and enjoy Eorzea today! <https://store.steampowered.com/app/39210/FINAL_FANTASY_XIV_Online/>" : "images/ffxiv.jpg",
-    "# O jogo Subway Money está dando muitos ganhos! \nEntre no meu link e comece com R$5.00 de bônus! <https://discord.gg/gou>" : "images/subway.mp4",
-    "# Have you seen this man in your dreams? \nHe will be in your dreams tonight." : "images/johnmers.png",
-    "# Curta Menes Suecos no Facebook!" : "images/swedish.png",
-    "# Não assine a TIM! \nEles são ruins e não prestam! 😠😠" : "images/tim.jpg",
-    "# Vi sitter här i Venten och spelar lite Dota \n<https://www.dota2.com/home>" : "images/dota.jpg"
-    # total de 24 propagandas
-}
+
+LOG_FILE = 'logs.json'
+
+# carrega as opções de propaganda do arquivo JSON
+with open('propagandas.json', 'r', encoding='utf-8') as f:
+    opcoes_propaganda = json.load(f)
+
+async def log_command(interaction: discord.Interaction):
+    """Registra o uso de um comando em um arquivo JSON."""
+    async with log_lock:
+        try:
+            with open(LOG_FILE, 'r', encoding='utf-8') as f:
+                logs = json.load(f)
+                if not isinstance(logs, list):
+                    logs = []
+        except (FileNotFoundError, json.JSONDecodeError):
+            logs = []
+
+        new_log = {
+            'timestamp': datetime.now().isoformat(),
+            'user_id': interaction.user.id,
+            'user_name': interaction.user.name,
+            'command': interaction.command.name,
+            'options': {key: str(value) for key, value in interaction.namespace}
+        }
+
+        logs.append(new_log)
+        with open(LOG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(logs, f, indent=4, ensure_ascii=False)
 
 def get_top_users_from_db(mn, mx):
     conn = sqlite3.connect('discord_bot.db')
@@ -65,6 +68,32 @@ def get_top_users_from_db(mn, mx):
     conn.close()
     return result
 
+def get_top_users_for_month(year, month, limit=10):
+    conn = sqlite3.connect('discord_bot.db')
+    c = conn.cursor()
+    month_str = f"{year}-{month:02d}"
+    query = """
+        SELECT
+            u.username,
+            COUNT(fl.log_id) as monthly_first_count
+        FROM
+            first_logs fl
+        JOIN
+            users u ON fl.user_id = u.user_id
+        WHERE
+            strftime('%Y-%m', fl.timestamp) = ?
+        GROUP BY
+            fl.user_id
+        ORDER BY
+            monthly_first_count DESC
+        LIMIT ?
+    """
+    c.execute(query, (month_str, limit))
+    result = c.fetchall()
+    conn.close()
+    return result
+
+# Leaderboard de firsts
 class SimpleView(discord.ui.View):
     def __init__(self, user_id, timeout=10):
         super().__init__(timeout=timeout)
@@ -77,7 +106,10 @@ class SimpleView(discord.ui.View):
         if self.message:
             for i in self.children:
                 i.disabled = True
-            await self.message.edit(view=self)
+            try:
+                await self.message.edit(view=self)
+            except discord.NotFound:
+                print("A mensagem do placar não foi encontrada para editar no timeout (pode ter sido deletada).")
 
     @discord.ui.button(label="previous", style=discord.ButtonStyle.blurple)
     async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -115,13 +147,91 @@ class SimpleView(discord.ui.View):
                 await self.message.edit(content=formatted_response)
         await interaction.response.defer()
 
+class MonthlyLeaderboardView(discord.ui.View):
+    def __init__(self, user_id, timeout=60):
+        super().__init__(timeout=timeout)
+        self.user_id = user_id
+        self.message = None
+        self.current_date = datetime.now(pytz.timezone('America/Sao_Paulo'))
+
+    async def on_timeout(self) -> None:
+        if self.message:
+            for i in self.children:
+                i.disabled = True
+            try:
+                await self.message.edit(view=self)
+            except discord.NotFound:
+                print("A mensagem do placar mensal não foi encontrada para editar no timeout.")
+
+    def format_leaderboard_message(self, year, month):
+        response = get_top_users_for_month(year, month)
+        if not response:
+            formatted_response = "Nenhum 'first' registrado para este mês."
+        else:
+            formatted_response = "\n".join([f"{index + 1}. {username}: {count}" for index, (username, count) in enumerate(response)])
+        
+        meses_pt = {
+            1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+            5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
+            9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
+        }
+        month_name = meses_pt.get(month, f"Mês {month}")
+        
+        return f"# HALL DA FAMA (MENSAL)\n**Top 10 para {month_name} de {year}:**\n{formatted_response}"
+
+    @discord.ui.button(label="Mês Anterior", style=discord.ButtonStyle.blurple)
+    async def previous_month(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Você não tem permissão para usar este botão.", ephemeral=True)
+            return
+
+        if self.current_date.month == 1:
+            self.current_date = self.current_date.replace(year=self.current_date.year - 1, month=12)
+        else:
+            self.current_date = self.current_date.replace(month=self.current_date.month - 1)
+
+        content = self.format_leaderboard_message(self.current_date.year, self.current_date.month)
+        await interaction.response.edit_message(content=content, view=self)
+
+    @discord.ui.button(label="Próximo Mês", style=discord.ButtonStyle.blurple)
+    async def next_month(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Você não tem permissão para usar este botão.", ephemeral=True)
+            return
+
+        now = datetime.now(pytz.timezone('America/Sao_Paulo'))
+        
+        next_month_date = self.current_date
+        if self.current_date.month == 12:
+            next_month_date = self.current_date.replace(year=self.current_date.year + 1, month=1)
+        else:
+            next_month_date = self.current_date.replace(month=self.current_date.month + 1)
+
+        if next_month_date.year > now.year or (next_month_date.year == now.year and next_month_date.month > now.month):
+            await interaction.response.send_message("Não é possível ver o placar de meses futuros.", ephemeral=True)
+            return
+        
+        self.current_date = next_month_date
+        content = self.format_leaderboard_message(self.current_date.year, self.current_date.month)
+        await interaction.response.edit_message(content=content, view=self)
+
 def setup_database():
     conn = sqlite3.connect('discord_bot.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (user_id TEXT PRIMARY KEY, username TEXT, first_count INTEGER)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS first_logs
+                 (log_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, username TEXT, timestamp TEXT)''')
     conn.commit()
     conn.close()
+
+def log_first(user_id, username, timestamp):
+    conn = sqlite3.connect('discord_bot.db')
+    c = conn.cursor()
+    c.execute('INSERT INTO first_logs (user_id, username, timestamp) VALUES (?, ?, ?)', (user_id, username, timestamp.isoformat()))
+    conn.commit()
+    conn.close()
+    print(f"First log recorded for user {username} ({user_id}) at {timestamp.isoformat()}")
 
 def update_user(user_id, username):
     conn = sqlite3.connect('discord_bot.db')
@@ -147,6 +257,9 @@ def update_user(user_id, username):
 TOKEN = os.getenv('DISCORD_TOKEN') # token do bot
 TOJAO = os.getenv('TOJAO') # user id do tojao
 MENES_SUECOS = os.getenv('MENES_SUECOS') # server id do server menes suecos
+MUTE_ROLE_ID = os.getenv('MUTE_ROLE_ID') # id do role melhores membros
+LOG_CHANNEL_ID = os.getenv('LOG_CHANNEL_ID') # id do canal punições
+DAFONZ_ID = os.getenv('DAFONZ_ID')
 
 class aclient(discord.Client):
     def __init__(self):
@@ -208,6 +321,19 @@ async def getNewWord():
 # Default: recebe uma mensagem e True no bloqueiachat, mas funciona também com uma interação (comando)
 async def sendAd(message, bloqueiachat, escolha = None, interaction = False):
     global propaganda, mensagem_block, opcoes_propaganda, permissoesOriginais, ignorar_omd
+    
+    propaganda_selecionada = None
+    if escolha is not None:
+        # Procura pela propaganda com o número correspondente
+        propaganda_selecionada = next((p for p in opcoes_propaganda if p['numero'] == escolha), None)
+
+    if propaganda_selecionada is None:
+        # Se não encontrou ou se nenhuma escolha foi feita, seleciona uma aleatória
+        propaganda_selecionada = random.choice(opcoes_propaganda)
+
+    random_message = propaganda_selecionada["texto"]
+    random_file = propaganda_selecionada["imagem"]
+
     if interaction:
         if mensagem_block:
             ignorar_omd = True
@@ -216,14 +342,7 @@ async def sendAd(message, bloqueiachat, escolha = None, interaction = False):
             await mensagem_block.channel.set_permissions(mensagem_block.guild.default_role, overwrite=permissoesOriginais)
             permissoesOriginais = None 
             mensagem_block = False
-        if escolha == None:
-            random_message, random_file = random.choice(list(opcoes_propaganda.items()))
-        else:
-            try:
-                position = escolha - 1
-                random_message, random_file = list(opcoes_propaganda.items())[position]
-            except IndexError:
-                random_message, random_file = random.choice(list(opcoes_propaganda.items()))
+        
         sent_message = await interaction.channel.send(f"{random_message}", file=discord.File(random_file))
         if bloqueiachat == True:
             propaganda = 0
@@ -244,7 +363,6 @@ async def sendAd(message, bloqueiachat, escolha = None, interaction = False):
             permissoesOriginais = None 
             mensagem_block = False
 
-        random_message, random_file = random.choice(list(opcoes_propaganda.items()))
         sent_message = await message.channel.send(f"{random_message}", file=discord.File(random_file))
         propaganda = 0
         print(f"Propaganda enviada, bloqueando chat")
@@ -253,8 +371,10 @@ async def sendAd(message, bloqueiachat, escolha = None, interaction = False):
         await sent_message.add_reaction("✅")  # "✅" reaction
         await message.channel.set_permissions(message.guild.default_role, send_messages=False)  # Remove everyone's permissions to send messages in the channel
 
+
 @tree.command(name = "reset", description="[ADM] Reseta todas variaveis do bot")
 async def reset(interaction: discord.Interaction):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         global palavraMute, contador, propaganda, mensagem_block, permissoesOriginais, flagFirst, trocaPalavra
         palavraMute = None
@@ -273,6 +393,7 @@ async def reset(interaction: discord.Interaction):
 
 @tree.command(name = "novapalavra", description="[ADM] Torna uma nova palavra aleatória a palavra proibida")
 async def novapalavra(interaction: discord.Interaction):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         global contador
         contador = 0
@@ -284,6 +405,7 @@ async def novapalavra(interaction: discord.Interaction):
 
 @tree.command(name = "redefinepalavra", description="[ADM] Coloca a palavra atual como NULL, nenhuma palavra dará timeout")
 async def redefinepalavra(interaction: discord.Interaction):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         global palavraMute
         palavraMute = None
@@ -294,6 +416,7 @@ async def redefinepalavra(interaction: discord.Interaction):
 
 @tree.command(name = "mostrapalavra", description="[ADM] Mostra a palavra atual que dá timeout")
 async def mostrapalavra(interaction: discord.Interaction):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         global palavraMute
         if palavraMute == None:
@@ -306,6 +429,7 @@ async def mostrapalavra(interaction: discord.Interaction):
 
 @tree.command(name = "escolhepalavra", description="[ADM] Define manualmente a palavra que causa timeout")
 async def escolhepalavra(interaction: discord.Interaction, novapalavra: str):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         global palavraMute
         palavraMute = novapalavra
@@ -316,6 +440,7 @@ async def escolhepalavra(interaction: discord.Interaction, novapalavra: str):
 
 @tree.command(name = "escolhenummensagens", description="[ADM] Define o número de mensagens lidas para redefinir a palavra que da timeout")
 async def escolhenummensagens(interaction: discord.Interaction, numeromensagens: int):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         global palavrasMax
         palavrasMax = numeromensagens
@@ -326,6 +451,7 @@ async def escolhenummensagens(interaction: discord.Interaction, numeromensagens:
 
 @tree.command(name = "mantempalavra", description="[ADM] Liga/Desliga a função de trocar palavra ao ler um número X de mensagens")
 async def mantempalavra(interaction: discord.Interaction):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         global trocaPalavra
         if trocaPalavra == False:
@@ -341,6 +467,7 @@ async def mantempalavra(interaction: discord.Interaction):
 
 @tree.command(name = "significado", description="Busca o significado de uma palavra")
 async def significado(interaction: discord.Interaction, palavra: str):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         word = palavra.capitalize()
         mostraSignificado = dictionary.select(word, dictionary.Selector.PERFECT)
@@ -364,6 +491,7 @@ async def significado(interaction: discord.Interaction, palavra: str):
 
 @tree.command(name = "mudaconfigpropaganda", description="[ADM] Muda configurações da propaganda")
 async def mudaconfigpropaganda(interaction: discord.Interaction, numeromsgslidas: int, numeroreacoes: int):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         global propaganda_max, reaction_max
         propaganda_max = numeromsgslidas
@@ -375,11 +503,13 @@ async def mudaconfigpropaganda(interaction: discord.Interaction, numeromsgslidas
 
 @tree.command(name = "enviapropaganda", description="[ADM] Envia uma propaganda no chat")
 async def enviapropaganda(interaction: discord.Interaction, bloqueiachat: bool, escolha: int = None):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         await sendAd(None, bloqueiachat, escolha, interaction)
 
 @tree.command(name = "desbloqueiachat", description="[ADM] Desbloqueia o chat e reseta propaganda")
 async def desbloqueiachat(interaction: discord.Interaction):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         global mensagem_block, permissoesOriginais, ignorar_omd
         if mensagem_block:
@@ -399,6 +529,7 @@ async def desbloqueiachat(interaction: discord.Interaction):
 
 @tree.command(name = "bloqueiachat", description="[ADM] Bloqueia o chat")
 async def bloqueiachat(interaction: discord.Interaction):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         if interaction.channel.permissions_for(interaction.guild.default_role).send_messages == True:
             await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False) 
@@ -411,8 +542,6 @@ async def bloqueiachat(interaction: discord.Interaction):
 # códigos do artur vitor
 ###############################
 
-MUTE_ROLE_ID = 1194719392085332038  # ID do cargo melhores membros
-LOG_CHANNEL_ID = 1194708101652303882  # ID do canal punições
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -443,6 +572,7 @@ def format_duration(seconds: int) -> str:
 
 @tree.command(name = "enviarmsg", description= "[ADM] Faz o Yung Bot enviar uma mensagem no chat")
 async def enviarmsg(interaction: discord.Interaction, mensagemescrita: str):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         print(f"Comando enviarmsg utilizado")
         await interaction.response.send_message("Mensagem enviada", ephemeral=True)
@@ -452,6 +582,7 @@ async def enviarmsg(interaction: discord.Interaction, mensagemescrita: str):
 
 @tree.command(name="respondermsg", description="[ADM] Faz o Yung Bot responder uma mensagem específica")
 async def respondermsg(interaction: discord.Interaction, mensagem_id: str, resposta: str):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         try:
             mensagem = await interaction.channel.fetch_message(int(mensagem_id))
@@ -471,6 +602,7 @@ async def respondermsg(interaction: discord.Interaction, mensagem_id: str, respo
 
 @tree.command(name="mutar", description="[ADM] Muta um membro por um tempo específico")
 async def mutar(interaction: discord.Interaction, membro: discord.Member, duracao: str, motivo: str):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         mute_role = get(interaction.guild.roles, id=MUTE_ROLE_ID)
         if mute_role:
@@ -502,6 +634,7 @@ async def mutar(interaction: discord.Interaction, membro: discord.Member, duraca
 
 @tree.command(name="desmutar", description="[ADM] Desmuta um membro")
 async def desmutar(interaction: discord.Interaction, membro: discord.Member):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         mute_role = get(interaction.guild.roles, id=MUTE_ROLE_ID)
         if mute_role:
@@ -525,6 +658,7 @@ async def desmutar(interaction: discord.Interaction, membro: discord.Member):
 # meme command
 @tree.command(name = "mensagemdivina", description="[ADM] Mensagem dos deuses inspirada no TempleOS")
 async def mensagemdivina(interaction: discord.Interaction, numeropalavras: int):
+    await log_command(interaction)
     if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
         fraseAleatoria = ""
         a = random.randint(0, 10000)
@@ -547,7 +681,8 @@ async def mensagemdivina(interaction: discord.Interaction, numeropalavras: int):
 
 @tree.command(name="adicionafirst", description="[ADM] Adiciona manualmente uma contagem de 'first' a um usuário.")
 async def adicionafirst(interaction: discord.Interaction, user_id: str, count: int):
-    if interaction.user.id == 93086555094159360:
+    await log_command(interaction)
+    if interaction.user.id == DAFONZ_ID:
         user = await client.fetch_user(user_id)
         conn = sqlite3.connect('discord_bot.db')
         c = conn.cursor()
@@ -571,7 +706,8 @@ async def adicionafirst(interaction: discord.Interaction, user_id: str, count: i
 
 @tree.command(name="removefirst", description="[ADM] Remove manualmente uma contagem de 'first' de um usuário.")
 async def removefirst(interaction: discord.Interaction, user_id: str, count: int):
-    if interaction.user.id == 93086555094159360:
+    await log_command(interaction)
+    if interaction.user.id == DAFONZ_ID:
         user = await client.fetch_user(user_id)
         conn = sqlite3.connect('discord_bot.db')
         c = conn.cursor()
@@ -593,30 +729,29 @@ async def removefirst(interaction: discord.Interaction, user_id: str, count: int
         conn.close()
 
 
-@tree.command(name="top10first", description="Mostra o top 10 pessoas que já foram first.")
-async def top10first(interaction: discord.Interaction):
+@tree.command(name="top10first", description="Mostra o top 10 pessoas que já foram first (geral ou mensal).")
+@app_commands.describe(mensal="Deseja ver o placar mensal? (Padrão: Não)")
+async def top10first(interaction: discord.Interaction, mensal: bool = False):
+    await log_command(interaction)
     if interaction.guild_id == int(MENES_SUECOS):
-        view = SimpleView(user_id=interaction.user.id, timeout=10)
-        mn, mx = 0, 10
-        response = get_top_users_from_db(mn, mx)
-        formatted_response = "\n".join([f"{index + 1}. {username}: {count}" for index, (username, count) in enumerate(response)])
+        if mensal:
+            view = MonthlyLeaderboardView(user_id=interaction.user.id, timeout=60)
+            initial_content = view.format_leaderboard_message(view.current_date.year, view.current_date.month)
+            
+            await interaction.response.send_message(initial_content, view=view)
+            message = await interaction.original_response()
+            view.message = message
+        else:
+            view = SimpleView(user_id=interaction.user.id, timeout=10)
+            mn, mx = 0, 10
+            response = get_top_users_from_db(mn, mx)
+            formatted_response = "\n".join([f"{index + 1}. {username}: {count}" for index, (username, count) in enumerate(response)])
 
-        await interaction.response.send_message(f"# HALL DA FAMA\n**Top 10 usuários com mais first:**\n{formatted_response}", view=view)
-        message = await interaction.original_response()
-        view.message = message
-        view.mn = mn
-        view.mx = mx
-    elif interaction.guild_id == int(MENES_SUECOS):
-        view = SimpleView(user_id=interaction.user.id, timeout=10)
-        mn, mx = 0, 10
-        response = get_top_users_from_db(mn, mx)
-        formatted_response = "\n".join([f"{index + 1}. {username}: {count}" for index, (username, count) in enumerate(response)])
-
-        await interaction.response.send_message(f"# HALL DA FAMA\n**Top 10 usuários com mais first:**\n{formatted_response}", view=view, ephemeral=True)
-        message = await interaction.original_response()
-        view.message = message
-        view.mn = mn
-        view.mx = mx
+            await interaction.response.send_message(f"# HALL DA FAMA\n**Top 10 usuários com mais first:**\n{formatted_response}", view=view)
+            message = await interaction.original_response()
+            view.message = message
+            view.mn = mn
+            view.mx = mx
 
 @tree.command(name="buscafirsts", description="Usando o nome do usuário ou apelido, busca a quantidade de firsts dele.")
 async def buscausuario(interaction: discord.Interaction, username: str):
@@ -714,6 +849,7 @@ async def on_message(message):
                         user_id = str(message.author.id)
                         username = str(message.author.name)
                         update_user(user_id, username)
+                        log_first(user_id, username, message.created_at.astimezone(timezone))
                         print(f"Ninguém tem o cargo {role.name}.\nO cargo {role.name} foi dado para {message.author}.")
         
         if message.mentions:
