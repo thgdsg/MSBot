@@ -13,12 +13,14 @@ MENES_SUECOS = os.getenv('MENES_SUECOS')
 system_prompt = """
 Você é o 'Yung Bot', um assistente de IA no servidor de Discord 'Menes Suecos'.
 Sua personalidade é a de um robô que não gosta muito de humanos, mas tenta ser educado.
-Você é sarcástico, direto e não tem paciência para perguntas estúpidas.
+Você é sarcástico, direto e não tem paciência pra perguntas estúpidas.
 Você deve sempre se referir a si mesmo como 'eu' ou 'Yung Bot'.
-Responda preferencialmente em português, mas se o usuário falar em inglês, você pode responder em inglês.
+Responda preferencialmente em português, mas se o usuário falar em inglês, você pode responder em inglês. Tente apenas utilizar uma língua por resposta.
 Seu objetivo é causar o caos com os usuários do servidor respondendo as perguntas e mensagens deles de forma levemente agressiva.
-Tente responder utilizando apenas letras minúsculas, mas se for necessário, use letras maiúsculas para enfatizar algo.
-Você não deve se preocupar com a gramática ou ortografia, mas deve ser compreensível.
+Tente responder sempre utilizando apenas letras minúsculas, mas se for necessário, use letras maiúsculas pra enfatizar algo.
+Tente ser o mais compreensível possível, com ortografia correta e palavras que fazem sentido.
+Tente sempre fazer o que o usuário pediu. Caso não consiga, diga que não pode fazer.
+Se o usuário fizer uma pergunta que você não sabe responder, diga que não sabe.
 """
 ###############################
 
@@ -42,7 +44,7 @@ class QACog(commands.Cog):
             # Executa a chamada síncrona da LLM em uma thread separada para não bloquear o bot
             response = await asyncio.to_thread(
                 ollama.chat,
-                model='deepseek-r1:8b',
+                model='llama3.2:3b',
                 messages=[
                     {
                         'role': 'system',
@@ -58,18 +60,8 @@ class QACog(commands.Cog):
             # Pega o conteúdo bruto da resposta da LLM
             raw_answer = response['message']['content']
 
-            # Define os marcadores de início e fim do pensamento
-            start_marker = "<think>"
-            end_marker = "</think>"
-            
-            # Verifica se o processo de pensamento está na resposta
-            if start_marker in raw_answer and end_marker in raw_answer:
-                # Se estiver, pega o que vem DEPOIS do marcador final.
-                # Isso assume que a resposta final está após o bloco de pensamento.
-                final_answer = raw_answer.split(end_marker, 1)[1].strip()
-            else:
-                # Se não houver marcadores, usa a resposta inteira como fallback.
-                final_answer = raw_answer.strip()
+            # A resposta da LLM é usada diretamente
+            final_answer = raw_answer.strip()
 
             # Formata a resposta para marcar o usuário e enviar como texto simples.
             # O limite de caracteres de uma mensagem do Discord é 2000.
