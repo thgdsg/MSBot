@@ -10,8 +10,8 @@ class PropagandaCog(commands.Cog):
     def __init__(self, client):
         self.client = client
 
-    async def sendAd(self, interaction, bloqueiachat, escolha=None):
-        """Envia uma propaganda no chat, com opção de bloquear."""
+    async def sendAd(self, channel, guild, bloqueiachat, escolha=None):
+        """Lógica interna para enviar uma propaganda e opcionalmente bloquear o chat."""
         propaganda_selecionada = None
         if escolha is not None:
             propaganda_selecionada = next((p for p in self.client.opcoes_propaganda if p.get('numero') == escolha), None)
@@ -25,7 +25,10 @@ class PropagandaCog(commands.Cog):
         # Limpa o estado de bloqueio anterior, se houver
         if self.client.mensagem_block:
             try:
-                await self.client.mensagem_block.channel.set_permissions(self.client.mensagem_block.guild.default_role, overwrite=self.client.permissoesOriginais)
+                # Usa o canal e guild do bloqueio anterior para restaurar permissões
+                prev_channel = self.client.mensagem_block.channel
+                prev_guild = self.client.mensagem_block.guild
+                await prev_channel.set_permissions(prev_guild.default_role, overwrite=self.client.permissoesOriginais)
                 await self.client.mensagem_block.delete()
             except (discord.NotFound, discord.Forbidden) as e:
                 print(f"Não foi possível limpar o bloqueio anterior: {e}")
@@ -34,18 +37,15 @@ class PropagandaCog(commands.Cog):
                 self.client.permissoesOriginais = None
 
         # Envia a nova propaganda
-        sent_message = await interaction.channel.send(f"{random_message}", file=discord.File(random_file_path) if random_file_path else None)
+        sent_message = await channel.send(f"{random_message}", file=discord.File(random_file_path) if random_file_path else None)
         
         if bloqueiachat:
             self.client.propaganda = 0
             print(f"Propaganda enviada, bloqueando chat")
             self.client.mensagem_block = sent_message
-            self.client.permissoesOriginais = interaction.channel.overwrites_for(interaction.guild.default_role)
+            self.client.permissoesOriginais = channel.overwrites_for(guild.default_role)
             await sent_message.add_reaction("✅")
-            await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False)
-            await interaction.response.send_message("Propaganda enviada e chat bloqueado.", ephemeral=True)
-        else:
-            await interaction.response.send_message("Propaganda enviada.", ephemeral=True)
+            await channel.set_permissions(guild.default_role, send_messages=False)
 
     @app_commands.command(name="mudaconfigpropaganda", description="[ADM] Muda configurações da propaganda")
     async def mudaconfigpropaganda(self, interaction: discord.Interaction, numeromsgslidas: int, numeroreacoes: int):
@@ -60,7 +60,9 @@ class PropagandaCog(commands.Cog):
     @app_commands.command(name="enviapropaganda", description="[ADM] Envia uma propaganda no chat")
     async def enviapropaganda(self, interaction: discord.Interaction, bloqueiachat: bool, escolha: int = None):
         if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
-            await self.sendAd(interaction, bloqueiachat, escolha)
+            await interaction.response.defer(ephemeral=True)
+            await self.sendAd(interaction.channel, interaction.guild, bloqueiachat, escolha)
+            await interaction.followup.send("Propaganda enviada.", ephemeral=True)
         else:
             await interaction.response.send_message("Você não tem permissões suficientes", ephemeral=True)
 

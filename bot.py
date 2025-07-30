@@ -58,7 +58,7 @@ def log_first_event(user_id, username, timestamp):
     conn.close()
     print(f"Log de 'first' registrado para {username} ({user_id}) em {timestamp.isoformat()}")
 
-class YungBot(commands.Bot):
+class MSBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=discord.Intents.all())
         self.synced = False
@@ -97,7 +97,7 @@ class YungBot(commands.Bot):
             # Converte as opções do comando para um dicionário de strings
             options_dict = {}
             if interaction.data and 'options' in interaction.data:
-                 for option in interaction.data.get('options', []):
+                for option in interaction.data.get('options', []):
                     options_dict[option['name']] = str(option['value'])
 
             new_log = {
@@ -167,12 +167,33 @@ class YungBot(commands.Bot):
                     await member.remove_roles(role)
                     print(f"Cargo 'first' removido de {member.name}")
 
-client = YungBot()
+client = MSBot()
 
 @client.event
 async def on_message(message: discord.Message):
     if message.author.bot or message.guild is None or str(message.guild.id) != MENES_SUECOS:
         return
+
+    # Verifica se o bot foi mencionado
+    if client.user.mentioned_in(message):
+        # Remove a menção da mensagem para obter o texto puro
+        content = message.content.replace(f'<@{client.user.id}>', '').strip()
+        
+        # Ignora se não houver texto após a menção
+        if not content:
+            return
+
+        llm_cog = client.get_cog('QACog')
+        if llm_cog:
+            async with message.channel.typing():
+                response = await llm_cog.get_ai_response(
+                    channel_id=str(message.channel.id),
+                    author_name=message.author.display_name,
+                    message_text=content
+                )
+                # Responde à mensagem original
+                await message.reply(response)
+            return # Retorna para não processar as outras lógicas (palavra proibida, etc.)
 
     # processa comandos de texto (não tem nenhum)
     await client.process_commands(message)
@@ -211,9 +232,8 @@ async def on_message(message: discord.Message):
         if client.propaganda >= client.propaganda_max:
             propaganda_cog = client.get_cog('PropagandaCog')
             if propaganda_cog and not isinstance(message.channel, discord.Thread):
-                # simula uma interação para reutilizar a função do cog
-                mock_interaction = type('Interaction', (), {'channel': message.channel, 'guild': message.guild, 'user': client.user})
-                await propaganda_cog.sendAd(mock_interaction, bloqueiachat=True)
+                # Chama a lógica interna do cog diretamente
+                await propaganda_cog.sendAd(message.channel, message.guild, bloqueiachat=True)
                 client.propaganda = 0
 
     # Lógica do first
@@ -226,6 +246,7 @@ async def on_message(message: discord.Message):
                 role = discord.utils.get(message.guild.roles, name="first")
                 if role:
                     await message.author.add_roles(role)
+                    print(f"Usuário {message.author.name} recebeu o cargo 'first'.")
                 await message.channel.send(f"Parabéns {message.author.mention}, você foi o primeiro a falar 'first' hoje!")
                 update_user_first_count(str(message.author.id), message.author.name)
                 log_first_event(str(message.author.id), message.author.name, now)
