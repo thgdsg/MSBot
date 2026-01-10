@@ -76,13 +76,77 @@ class MSBot(commands.Bot):
         self.trocaPalavra = True
         self.permissoesOriginais = None
         self.flagFirst = True
-        self.ignorar_omd = False
         self.lock = asyncio.Lock()
         self.log_lock = asyncio.Lock()
-        self._last_first_reset_date: str | None = None  # "YYYY-MM-DD"
+
+        # scheduler do reset "first" (não roda na inicialização; agenda pro próximo 00:00)
+        self._first_reset_task: asyncio.Task | None = None
 
         with open('propagandas.json', 'r', encoding='utf-8') as f:
             self.opcoes_propaganda = json.load(f)
+
+    def _seconds_until_next_midnight_sp(self) -> float:
+        tz = pytz.timezone("America/Sao_Paulo")
+        now = datetime.now(tz)
+
+        next_day = (now + timedelta(days=1)).date()
+        naive_next_midnight = datetime.combine(next_day, time(0, 0, 0))
+
+        # pytz: sempre use localize
+        next_midnight = tz.localize(naive_next_midnight, is_dst=None)
+
+        delta = (next_midnight - now).total_seconds()
+        # safety clamp
+        return max(0.0, delta)
+
+    async def _do_first_reset(self) -> None:
+        """Remove o cargo 'first' de todos e libera para o próximo 'first' do dia."""
+        print("00:00 (SP), resetando flag 'first' e removendo cargos.")
+        self.flagFirst = False
+
+        guild = self.get_guild(int(MENES_SUECOS))
+        if not guild:
+            return
+
+        role = discord.utils.get(guild.roles, name="first")
+        if not role:
+            return
+
+        for member in list(role.members):
+            try:
+                await member.remove_roles(role)
+                print(f"Cargo 'first' removido de {member.name}")
+            except discord.Forbidden:
+                print(f"Sem permissão para remover cargo de {member.name}")
+            except discord.HTTPException as e:
+                print(f"Falha ao remover cargo de {member.name}: {e}")
+
+    async def _first_reset_scheduler(self) -> None:
+        """Scheduler alinhado ao timezone: dorme até o próximo 00:00 (SP), executa, repete."""
+        await self.wait_until_ready()
+
+        while not self.is_closed():
+            delay = self._seconds_until_next_midnight_sp()
+            print(f"Próximo reset do 'first' em ~{int(delay)}s (00:00 SP).")
+            try:
+                await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                return
+
+            # Executa o reset e então agenda novamente (recalcula o próximo 00:00)
+            try:
+                await self._do_first_reset()
+            except Exception as e:
+                print(f"Erro no reset do 'first': {e}")
+
+    async def on_ready(self):
+        await self.wait_until_ready()
+        print(f"Conectado ao Discord como {self.user}!")
+        setup_database()
+
+        # inicia scheduler (não faz reset imediato)
+        if self._first_reset_task is None or self._first_reset_task.done():
+            self._first_reset_task = asyncio.create_task(self._first_reset_scheduler())
 
     async def log_command(self, interaction: discord.Interaction):
         """Registra o uso de um comando em um arquivo JSON."""
@@ -148,69 +212,6 @@ class MSBot(commands.Bot):
         await self.log_command(interaction)
         # Retorna True para permitir que o comando continue a ser executado
         return True
-
-    async def on_ready(self):
-        await self.wait_until_ready()
-        print(f"Conectado ao Discord como {self.user}!")
-        setup_database()
-        # inicia o loop “robusto”
-        if not self.reset_first_flag.is_running():
-            self.reset_first_flag.start()
-
-    @tasks.loop(seconds=60)
-    async def reset_first_flag(self):
-        """
-        Checa a cada 60s se já passou da meia-noite em America/Sao_Paulo.
-        Quando virar o dia, executa uma vez e registra a data pra não repetir.
-        """
-        tz = pytz.timezone("America/Sao_Paulo")
-        now = datetime.now(tz)
-        today_key = now.strftime("%Y-%m-%d")
-
-        # ainda é o mesmo dia => não faz nada
-        if self._last_first_reset_date == today_key:
-            return
-
-        # só roda após 00:00 (evita rodar no primeiro boot do dia antes da meia-noite)
-        if now.time() < time(0, 0):
-            return
-
-        # marca como executado HOJE (pra não repetir)
-        self._last_first_reset_date = today_key
-
-        print("Virou o dia (SP), resetando flag 'first' e removendo cargos.")
-        self.flagFirst = False
-
-        guild = self.get_guild(int(MENES_SUECOS))
-        if not guild:
-            return
-
-        role = discord.utils.get(guild.roles, name="first")
-        if not role:
-            return
-
-        # remove de todo mundo que ainda tiver
-        for member in list(role.members):
-            try:
-                await member.remove_roles(role)
-                print(f"Cargo 'first' removido de {member.name}")
-            except discord.Forbidden:
-                print(f"Sem permissão para remover cargo de {member.name}")
-            except discord.HTTPException as e:
-                print(f"Falha ao remover cargo de {member.name}: {e}")
-
-    @reset_first_flag.before_loop
-    async def before_reset_first_flag(self):
-        await self.wait_until_ready()
-        # inicializa o "último reset" como o dia atual, se ainda não passou da meia-noite
-        tz = pytz.timezone("America/Sao_Paulo")
-        now = datetime.now(tz)
-        # Se o bot ligar DEPOIS da meia-noite, queremos que ele rode na próxima execução do loop.
-        # Então só marcamos como "já rodou hoje" se ainda NÃO passou da meia-noite.
-        if now.time() < time(0, 0):
-            self._last_first_reset_date = now.strftime("%Y-%m-%d")
-        else:
-            self._last_first_reset_date = None
 
 client = MSBot()
 
