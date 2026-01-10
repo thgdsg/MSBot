@@ -79,6 +79,7 @@ class MSBot(commands.Bot):
         self.ignorar_omd = False
         self.lock = asyncio.Lock()
         self.log_lock = asyncio.Lock()
+        self._last_first_reset_date: str | None = None  # "YYYY-MM-DD"
 
         with open('propagandas.json', 'r', encoding='utf-8') as f:
             self.opcoes_propaganda = json.load(f)
@@ -152,20 +153,64 @@ class MSBot(commands.Bot):
         await self.wait_until_ready()
         print(f"Conectado ao Discord como {self.user}!")
         setup_database()
-        self.reset_first_flag.start()
+        # inicia o loop “robusto”
+        if not self.reset_first_flag.is_running():
+            self.reset_first_flag.start()
 
-    @tasks.loop(time=time(0, 0, tzinfo=pytz.timezone('America/Sao_Paulo')))
+    @tasks.loop(seconds=60)
     async def reset_first_flag(self):
-        """Reseta a flag do 'first' e remove o cargo diariamente à meia-noite."""
-        print("Meia-noite, resetando flag 'first' e removendo cargos.")
+        """
+        Checa a cada 60s se já passou da meia-noite em America/Sao_Paulo.
+        Quando virar o dia, executa uma vez e registra a data pra não repetir.
+        """
+        tz = pytz.timezone("America/Sao_Paulo")
+        now = datetime.now(tz)
+        today_key = now.strftime("%Y-%m-%d")
+
+        # ainda é o mesmo dia => não faz nada
+        if self._last_first_reset_date == today_key:
+            return
+
+        # só roda após 00:00 (evita rodar no primeiro boot do dia antes da meia-noite)
+        if now.time() < time(0, 0):
+            return
+
+        # marca como executado HOJE (pra não repetir)
+        self._last_first_reset_date = today_key
+
+        print("Virou o dia (SP), resetando flag 'first' e removendo cargos.")
         self.flagFirst = False
+
         guild = self.get_guild(int(MENES_SUECOS))
-        if guild:
-            role = discord.utils.get(guild.roles, name="first")
-            if role:
-                for member in role.members:
-                    await member.remove_roles(role)
-                    print(f"Cargo 'first' removido de {member.name}")
+        if not guild:
+            return
+
+        role = discord.utils.get(guild.roles, name="first")
+        if not role:
+            return
+
+        # remove de todo mundo que ainda tiver
+        for member in list(role.members):
+            try:
+                await member.remove_roles(role)
+                print(f"Cargo 'first' removido de {member.name}")
+            except discord.Forbidden:
+                print(f"Sem permissão para remover cargo de {member.name}")
+            except discord.HTTPException as e:
+                print(f"Falha ao remover cargo de {member.name}: {e}")
+
+    @reset_first_flag.before_loop
+    async def before_reset_first_flag(self):
+        await self.wait_until_ready()
+        # inicializa o "último reset" como o dia atual, se ainda não passou da meia-noite
+        tz = pytz.timezone("America/Sao_Paulo")
+        now = datetime.now(tz)
+        # Se o bot ligar DEPOIS da meia-noite, queremos que ele rode na próxima execução do loop.
+        # Então só marcamos como "já rodou hoje" se ainda NÃO passou da meia-noite.
+        if now.time() < time(0, 0):
+            self._last_first_reset_date = now.strftime("%Y-%m-%d")
+        else:
+            self._last_first_reset_date = None
 
 client = MSBot()
 
@@ -183,7 +228,7 @@ async def on_message(message: discord.Message):
         if not content:
             return
 
-        llm_cog = client.get_cog('QACog')
+        llm_cog = client.get_cog('LLMCog')
         if llm_cog:
             async with message.channel.typing():
                 response = await llm_cog.get_ai_response(
@@ -191,8 +236,16 @@ async def on_message(message: discord.Message):
                     author_name=message.author.display_name,
                     message_text=content
                 )
-                # Responde à mensagem original
-                await message.reply(response)
+                # Tenta responder à mensagem original, com um fallback caso ela tenha sido deletada.
+                try:
+                    await message.reply(response)
+                except discord.HTTPException as e:
+                    if e.code == 50035: # Código de erro para "Unknown Message"
+                        print(f"Falha ao responder à mensagem {message.id} (provavelmente foi deletada). Enviando como nova mensagem.")
+                        await message.channel.send(f"{message.author.mention}, aqui está sua resposta:\n{response}")
+                    else:
+                        # Se for outro erro HTTP, relança a exceção.
+                        raise
             return # Retorna para não processar as outras lógicas (palavra proibida, etc.)
 
     # processa comandos de texto (não tem nenhum)
