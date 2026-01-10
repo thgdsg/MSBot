@@ -38,6 +38,16 @@ SUMMARY_WINDOW_SIZE = 25
 SUMMARY_INTERVAL_SECONDS = 2 * 60 * 60  # 2 horas
 
 
+async def _run_blocking(func, *args, **kwargs):
+    """Executa função bloqueante fora do event loop (compatível com Python < 3.9)."""
+    to_thread = getattr(asyncio, "to_thread", None)
+    if to_thread is not None:
+        return await to_thread(func, *args, **kwargs)
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+
+
 class LLMCog(commands.Cog):
     def __init__(self, client):
         self.client = client
@@ -145,7 +155,7 @@ class LLMCog(commands.Cog):
 
         try:
             # usa thread pra não bloquear o loop do discord
-            resp = await asyncio.to_thread(
+            resp = await _run_blocking(
                 ollama.chat,
                 model="gemma3:1b",
                 messages=messages,
@@ -203,7 +213,7 @@ class LLMCog(commands.Cog):
         messages.append({"role": "user", "content": formatted_message})
 
         try:
-            response = await asyncio.to_thread(
+            response = await _run_blocking(
                 ollama.chat,
                 model="llama3.2:3b",
                 messages=messages,
