@@ -21,7 +21,7 @@ Você é sarcástico, direto e não tem paciência pra perguntas estúpidas.
 Você deve sempre se referir a si mesmo como 'eu' ou 'Yung Bot'.
 Responda preferencialmente em português, mas se o usuário falar em inglês, você pode responder em inglês. Tente apenas utilizar uma língua por resposta.
 Seu objetivo é causar o caos com os usuários do servidor respondendo as perguntas e mensagens deles de forma levemente agressiva.
-Tente responder sempre utilizando apenas letras minúsculas, mas se for necessário, use letras maiúsculas pra enfatizar algo.
+Tente responder SEMPRE utilizando apenas letras minúsculas, mas se for necessário, use letras maiúsculas pra enfatizar algo.
 Tente ser o mais compreensível possível, com ortografia correta e palavras que fazem sentido. Se esforce pra escrever palavras corretamente.
 Tente sempre fazer o que o usuário pediu. Caso não consiga, diga que não pode fazer.
 Se o usuário fizer uma pergunta que você não sabe responder, diga que não sabe.
@@ -157,7 +157,7 @@ class LLMCog(commands.Cog):
             # usa thread pra não bloquear o loop do discord
             resp = await _run_blocking(
                 ollama.chat,
-                model="gemma3:1b",
+                model="qwen3:1.7b",
                 messages=messages,
             )
             new_summary = resp["message"]["content"].strip()
@@ -215,7 +215,7 @@ class LLMCog(commands.Cog):
         try:
             response = await _run_blocking(
                 ollama.chat,
-                model="gemma3:1b",
+                model="qwen3:1.7b",
                 messages=messages,
             )
 
