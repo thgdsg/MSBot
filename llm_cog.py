@@ -215,7 +215,7 @@ class LLMCog(commands.Cog):
         try:
             response = await _run_blocking(
                 ollama.chat,
-                model="llama3.2:3b",
+                model="gemma3:1b",
                 messages=messages,
             )
 
