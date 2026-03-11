@@ -1,4 +1,6 @@
 # bot.py
+from __future__ import annotations
+
 import os
 import discord
 import random
@@ -177,6 +179,47 @@ class MSBot(commands.Bot):
             with open(LOG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(logs, f, indent=4, ensure_ascii=False)
 
+    async def log_ai_interaction(
+        self,
+        *,
+        source: str,
+        user_id: int,
+        user_name: str,
+        guild_id: int | None,
+        channel_id: int | None,
+        prompt: str,
+        response: str,
+        message_id: int | None = None,
+        interaction_id: int | None = None,
+    ):
+        """Registra interacoes de IA (mensagem recebida e resposta gerada)."""
+        async with self.log_lock:
+            try:
+                with open(LOG_FILE, 'r', encoding='utf-8') as f:
+                    logs = json.load(f)
+                    if not isinstance(logs, list):
+                        logs = []
+            except (FileNotFoundError, json.JSONDecodeError):
+                logs = []
+
+            new_log = {
+                'timestamp': datetime.now().isoformat(),
+                'type': 'ai_interaction',
+                'source': source,
+                'user_id': user_id,
+                'user_name': user_name,
+                'guild_id': guild_id,
+                'channel_id': channel_id,
+                'message_id': message_id,
+                'interaction_id': interaction_id,
+                'prompt': prompt,
+                'response': response,
+            }
+
+            logs.append(new_log)
+            with open(LOG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(logs, f, indent=4, ensure_ascii=False)
+
     async def setup_hook(self):
         """Carrega as extensões (cogs) e sincroniza os comandos."""
         # Adiciona o middleware de log
@@ -237,6 +280,18 @@ async def on_message(message: discord.Message):
                     author_name=message.author.display_name,
                     message_text=content
                 )
+
+                await client.log_ai_interaction(
+                    source='mention',
+                    user_id=message.author.id,
+                    user_name=message.author.name,
+                    guild_id=message.guild.id if message.guild else None,
+                    channel_id=message.channel.id if message.channel else None,
+                    message_id=message.id,
+                    prompt=content,
+                    response=response,
+                )
+
                 # Tenta responder à mensagem original, com um fallback caso ela tenha sido deletada.
                 try:
                     await message.reply(response)
