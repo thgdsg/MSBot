@@ -23,6 +23,7 @@ MENES_SUECOS = os.getenv('MENES_SUECOS')
 LOG_CHANNEL_ID = os.getenv('LOG_CHANNEL_ID')
 
 LOG_FILE = 'logs.json'
+CONVERSATION_HISTORY_FILE = 'conversation_history.json'
 
 def setup_database():
     """Configura o banco de dados inicial."""
@@ -105,6 +106,13 @@ class MSBot(commands.Bot):
         """Remove o cargo 'first' de todos e libera para o próximo 'first' do dia."""
         print("00:00 (SP), resetando flag 'first' e removendo cargos.")
         self.flagFirst = False
+
+        try:
+            with open(CONVERSATION_HISTORY_FILE, 'w', encoding='utf-8') as f:
+                json.dump({}, f, indent=4, ensure_ascii=False)
+            print("conversation_history.json foi limpo no reset diário.")
+        except OSError as e:
+            print(f"Falha ao limpar conversation_history.json no reset: {e}")
 
         guild = self.get_guild(int(MENES_SUECOS))
         if not guild:
@@ -275,10 +283,29 @@ async def on_message(message: discord.Message):
         llm_cog = client.get_cog('LLMCog')
         if llm_cog:
             async with message.channel.typing():
+                referenced_bot_message = None
+
+                if message.reference and message.reference.message_id:
+                    referenced_message = message.reference.resolved
+                    if not isinstance(referenced_message, discord.Message):
+                        try:
+                            referenced_message = await message.channel.fetch_message(message.reference.message_id)
+                        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                            referenced_message = None
+
+                    if (
+                        isinstance(referenced_message, discord.Message)
+                        and referenced_message.author
+                        and referenced_message.author.id == client.user.id
+                    ):
+                        referenced_bot_message = referenced_message.content
+
                 response = await llm_cog.get_ai_response(
                     channel_id=str(message.channel.id),
                     author_name=message.author.display_name,
-                    message_text=content
+                    message_text=content,
+                    referenced_bot_message=referenced_bot_message,
+                    channel_name=getattr(message.channel, "name", None),
                 )
 
                 await client.log_ai_interaction(
