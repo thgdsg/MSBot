@@ -132,6 +132,29 @@ async def _resolve_referenced_bot_message(
     return None
 
 
+def _extract_image_urls_from_message(message: discord.Message) -> list[str]:
+    image_urls: list[str] = []
+
+    for attachment in message.attachments:
+        content_type = (attachment.content_type or "").lower()
+        filename = attachment.filename.lower()
+        if content_type.startswith("image/") or filename.endswith((".png", ".jpg", ".jpeg", ".webp")):
+            image_urls.append(attachment.url)
+            print(
+                "[vision] imagem anexada detectada: "
+                f"{filename} ({content_type or 'sem content-type'})"
+            )
+
+    for embed in message.embeds:
+        for embed_image in (embed.image, embed.thumbnail):
+            url = getattr(embed_image, "url", None)
+            if url:
+                image_urls.append(url)
+                print(f"[vision] imagem em embed detectada: {url}")
+
+    return list(dict.fromkeys(image_urls))
+
+
 async def _send_chunked_reply(message: discord.Message, response: str) -> None:
     chunks = [response[index : index + 2000] for index in range(0, len(response), 2000)] or ["(sem conteudo)"]
 
@@ -316,13 +339,36 @@ class MSBot(commands.Bot):
 
                 traceback.print_exc()
 
-        if not self.synced:
-            try:
-                await self.tree.sync()
+        try:
+            if MENES_SUECOS:
+                local_command_names = sorted(command.name for command in self.tree.get_commands())
+                print(f"Comandos locais antes do sync: {', '.join(local_command_names)}")
+
+                guild = discord.Object(id=int(MENES_SUECOS))
+                self.tree.clear_commands(guild=guild)
+                self.tree.copy_global_to(guild=guild)
+                guild_commands = await self.tree.sync(guild=guild)
+                guild_command_names = sorted(command.name for command in guild_commands)
+
+                self.tree.clear_commands(guild=None)
+                global_commands = await self.tree.sync()
+
                 self.synced = True
-                print("Arvore de comandos sincronizada.")
-            except Exception as err:
-                print(f"Falha ao sincronizar a arvore de comandos: {err}")
+                print(
+                    "Arvore de comandos sincronizada no servidor "
+                    f"{MENES_SUECOS} com {len(guild_commands)} comandos. "
+                    f"Comandos globais: {len(global_commands)}. "
+                    f"Comandos do servidor: {', '.join(guild_command_names)}"
+                )
+            elif not self.synced:
+                synced_commands = await self.tree.sync()
+                self.synced = True
+                print(
+                    "Arvore de comandos global sincronizada "
+                    f"com {len(synced_commands)} comandos."
+                )
+        except Exception as err:
+            print(f"Falha ao sincronizar a arvore de comandos: {err}")
 
     async def global_interaction_check(self, interaction: discord.Interaction) -> bool:
         await self.log_command(interaction)
@@ -339,7 +385,8 @@ async def on_message(message: discord.Message):
 
     if client.user.mentioned_in(message):
         content = message.content.replace(f"<@{client.user.id}>", "").strip()
-        if not content:
+        image_urls = _extract_image_urls_from_message(message)
+        if not content and not image_urls:
             return
 
         llm_cog = client.get_cog("LLMCog")
@@ -350,8 +397,10 @@ async def on_message(message: discord.Message):
                     channel_id=str(message.channel.id),
                     author_name=message.author.display_name,
                     message_text=content,
+                    user_id=message.author.id,
                     referenced_bot_message=referenced_bot_message,
                     channel_name=getattr(message.channel, "name", None),
+                    image_urls=image_urls,
                 )
 
                 await client.log_ai_interaction(

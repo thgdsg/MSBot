@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -5,11 +7,20 @@ import os
 import re
 import asyncio
 import random
+import shutil
+import tempfile
+from pathlib import Path
 from python_pt_dictionary import dictionary
+
+try:
+    import yt_dlp
+except ImportError:
+    yt_dlp = None
 
 MENES_SUECOS = os.getenv('MENES_SUECOS')
 LOG_CHANNEL_ID = os.getenv('LOG_CHANNEL_ID')
 MUTE_ROLE_ID = os.getenv('MUTE_ROLE_ID')
+VIDEO_QUALITY_LIMITS = [1080, 720, 480, 360, 240, 144]
 
 class CaoticosCog(commands.Cog):
     def __init__(self, client):
@@ -36,6 +47,72 @@ class CaoticosCog(commands.Cog):
             duration_parts.append(f"{seconds} segundos")
         return ", ".join(duration_parts) if duration_parts else "0 segundos"
 
+    def baixar_video_youtube(
+        self,
+        link: str,
+        download_dir: str,
+        max_height: int,
+    ) -> tuple[str, str]:
+        if yt_dlp is None:
+            raise RuntimeError("yt-dlp nao esta instalado. Rode: pip install yt-dlp")
+
+        ydl_opts = {
+            "format": (
+                f"best[ext=mp4][height<={max_height}]/"
+                f"best[height<={max_height}]/"
+                "worst[ext=mp4]/worst"
+            ),
+            "noplaylist": True,
+            "outtmpl": os.path.join(download_dir, "%(title).80s [%(id)s].%(ext)s"),
+            "quiet": True,
+            "no_warnings": True,
+            "restrictfilenames": True,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(link, download=True)
+            video_path = ydl.prepare_filename(info)
+
+        if not os.path.exists(video_path):
+            downloaded_files = [
+                path for path in Path(download_dir).iterdir()
+                if path.is_file()
+            ]
+            if not downloaded_files:
+                raise RuntimeError("download finalizou, mas nenhum arquivo foi encontrado.")
+            video_path = str(max(downloaded_files, key=lambda path: path.stat().st_mtime))
+
+        title = str(info.get("title") or "video")
+        return video_path, title
+
+    def baixar_video_ate_limite(
+        self,
+        link: str,
+        download_dir: str,
+        max_size: int,
+    ) -> tuple[str, str, int]:
+        last_size = 0
+
+        for max_height in VIDEO_QUALITY_LIMITS:
+            for downloaded_file in Path(download_dir).iterdir():
+                if downloaded_file.is_file():
+                    downloaded_file.unlink(missing_ok=True)
+
+            video_path, title = self.baixar_video_youtube(link, download_dir, max_height)
+            last_size = os.path.getsize(video_path)
+            print(
+                f"[video] tentativa {max_height}p: "
+                f"{last_size / 1024 / 1024:.1f} MB"
+            )
+
+            if last_size <= max_size:
+                return video_path, title, max_height
+
+        raise RuntimeError(
+            "nao consegui baixar uma versao pequena o suficiente para o limite do servidor "
+            f"({last_size / 1024 / 1024:.1f} MB > {max_size / 1024 / 1024:.1f} MB)."
+        )
+
     @app_commands.command(name="enviarmsg", description="[ADM] Faz o Yung Bot enviar uma mensagem no chat")
     async def enviarmsg(self, interaction: discord.Interaction, mensagemescrita: str):
         if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
@@ -45,7 +122,41 @@ class CaoticosCog(commands.Cog):
         else:
             await interaction.response.send_message("Você não tem permissões suficientes", ephemeral=True)
 
-    @app_commands.command(name="respondermsg", description="[ADM] Faz o Yung Bot responder uma mensagem específica")
+    @app_commands.command(name="baixarvideo", description="Baixa um video e envia no chat")
+    async def baixarvideo(self, interaction: discord.Interaction, link: str):
+        if not interaction.user.guild_permissions.moderate_members or interaction.guild_id != int(MENES_SUECOS):
+            await interaction.response.send_message("Você não tem permissões suficientes", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        download_dir = tempfile.mkdtemp(prefix="yungbot_video_")
+
+        try:
+            max_size = getattr(interaction.guild, "filesize_limit", 25 * 1024 * 1024)
+            video_path, title, max_height = await asyncio.to_thread(
+                self.baixar_video_ate_limite,
+                link,
+                download_dir,
+                max_size,
+            )
+
+            await interaction.channel.send(
+                f"video baixado ({max_height}p): {title}",
+                file=discord.File(video_path),
+            )
+            await interaction.followup.send("video enviado e arquivo local apagado.", ephemeral=True)
+            print(f"Comando baixarvideo utilizado para {link}")
+        except Exception as err:
+            print(f"Falha ao baixar/enviar video: {err}")
+            await interaction.followup.send(
+                f"falha ao baixar ou enviar o video: {err}",
+                ephemeral=True,
+            )
+        finally:
+            shutil.rmtree(download_dir, ignore_errors=True)
+
+    @app_commands.command(name="respondermsg", description="[ADM] Faz o Yung Bot responder uma mensagem especifica com texto manual")
     async def respondermsg(self, interaction: discord.Interaction, mensagem_id: str, resposta: str):
         if interaction.user.guild_permissions.moderate_members and interaction.guild_id == int(MENES_SUECOS):
             try:
