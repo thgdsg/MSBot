@@ -1,0 +1,2 @@
+"""Aplicacao modular do MSBot."""
+

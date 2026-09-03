@@ -30,27 +30,29 @@ The AI module includes:
 The default model is:
 
 ```text
-minimaxai/minimax-m2.7
+deepseek-ai/deepseek-v4-flash-0731
 ```
 
 The default fallback model is:
 
 ```text
-moonshotai/kimi-k2-thinking
+minimaxai/minimax-m3
 ```
 
 Available models include:
 
 | Model                         |
 | ----------------------------- |
-| `minimaxai/minimax-m2.7`      |
-| `z-ai/glm4.7`                 |
-| `deepseek-ai/deepseek-v3_2`   |
-| `moonshotai/kimi-k2-thinking` |
+| `minimaxai/minimax-m3`               |
+| `z-ai/glm5.1`                        |
+| `deepseek-ai/deepseek-v4-flash-0731` |
+| `deepseek-ai/deepseek-v4-pro-0813`   |
+| `moonshotai/kimi-k3`                 |
 
 #### Persistent AI Memory
 
-Conversations are temporarily buffered per Discord channel.
+Conversations are temporarily buffered per Discord channel, retaining the
+author name, Discord user ID and UTC timestamps for each turn.
 
 After enough messages have accumulated, the bot summarizes the conversation and updates a channel-specific section inside:
 
@@ -58,7 +60,11 @@ After enough messages have accumulated, the bot summarizes the conversation and 
 MEMORY.md
 ```
 
-This allows the bot to preserve useful facts, recurring context, preferences, and previous decisions across conversations.
+This allows the bot to preserve useful facts, recurring context, preferences,
+and previous decisions across conversations. Summaries are requested as JSON
+operations (`add`, `update`, `delete`, and `ignore`) with scoped memories for
+the server, channel, or user. Entries include categories, confidence,
+timestamps, optional expiration, and conflict history.
 
 The AI module uses the following files:
 
@@ -67,6 +73,8 @@ The AI module uses the following files:
 | `conversation_history.json` | Stores AI interaction history            |
 | `memory_state.json`         | Stores messages waiting to be summarized |
 | `MEMORY.md`                 | Stores persistent summarized memory      |
+| `memory_backup.md`          | Seed used by the memory reset command    |
+| `memory_backups/`           | Versioned backups of `MEMORY.md`         |
 | `logs.json`                 | Stores commands and AI interaction logs  |
 
 ---
@@ -249,20 +257,23 @@ The feature is inspired by the random-word behavior associated with TempleOS and
 
 ---
 
-### Modular Cog Architecture
+### Layered application architecture
 
-The bot is divided into Discord cogs:
+The bot uses explicit dependency injection through `AppContext`; Discord
+registration is kept separate from feature logic:
 
-| File                | Responsibility                                                       |
-| ------------------- | -------------------------------------------------------------------- |
-| `bot.py`            | Main bot, events, shared state, database setup and extension loading |
-| `llm_cog.py`        | AI conversations, models, retries and persistent memory              |
-| `palavra_cog.py`    | Forbidden-word game and dictionary lookup                            |
-| `propaganda_cog.py` | Advertisements and channel locking                                   |
-| `first_cog.py`      | Daily first game, rankings and database commands                     |
-| `caoticos_cog.py`   | Moderation and miscellaneous commands                                |
+| Package | Responsibility |
+| --- | --- |
+| `app/config.py`, `app/state.py`, `app/context.py` | Configuration, volatile state, and shared services |
+| `app/services/` | AI, memory, NVIDIA, words, advertisements, first, and moderation logic |
+| `app/commands/` | Thin slash-command callbacks and the explicit command registry |
+| `app/events/` | Message, reaction, deletion, ready, and daily-reset handlers |
+| `app/persistence/` | JSON and SQLite repositories |
+| `app/views/` | Discord leaderboard views |
+| `bot.py` | Client bootstrap and lifecycle integration |
 
-This structure keeps each feature group isolated and makes the bot easier to maintain and extend.
+Run the tests with `python -m unittest discover` and start the bot with
+`python bot.py`.
 
 ---
 
@@ -273,6 +284,7 @@ This structure keeps each feature group isolated and makes the bot easier to mai
 | Command                 | Access    | Description                                  |
 | ----------------------- | --------- | -------------------------------------------- |
 | `/conversar mensagem`   | Everyone  | Sends a message to the AI assistant          |
+| `/enviarmsgllm prompt [modelo]` | Moderator | Sends an LLM-generated message to the channel |
 | `/alterarmodelo modelo` | Moderator | Changes the primary AI model                 |
 | `/vermemoria`           | Moderator | Displays the current contents of `MEMORY.md` |
 
@@ -510,6 +522,8 @@ The following files are generated during execution and are ignored by Git:
 | `conversation_history.json` | AI interaction history                    |
 | `memory_state.json`         | Pending AI memory buffers                 |
 | `MEMORY.md`                 | Persistent summarized AI memory           |
+| `memory_backup.md`          | Initial memory snapshot used for reset    |
+| `memory_backups/`           | Rotating versioned memory snapshots      |
 | `propagandas.json`          | Local advertisement configuration         |
 | `images/`                   | Advertisement image files                 |
 
@@ -529,11 +543,14 @@ Some settings are only stored in memory and reset when the bot restarts, includi
 ```text
 MSBot/
 ├── bot.py
-├── llm_cog.py
-├── palavra_cog.py
-├── propaganda_cog.py
-├── first_cog.py
-├── caoticos_cog.py
+├── app/
+│   ├── commands/
+│   ├── events/
+│   ├── persistence/
+│   ├── services/
+│   ├── views/
+│   └── config.py, context.py, state.py
+├── tests/
 ├── requirements.txt
 ├── propagandas.json         # Local file, ignored by Git
 ├── images/                  # Local directory, ignored by Git
@@ -543,3 +560,7 @@ MSBot/
 ├── discord_bot.db
 └── logs.json
 ```
+The executable source now lives under `app/`, with commands in
+`app/commands/`, event handlers in `app/events/`, persistence adapters in
+`app/persistence/`, domain services in `app/services/`, and Discord UI views
+in `app/views/`. `bot.py` remains the entry point.
