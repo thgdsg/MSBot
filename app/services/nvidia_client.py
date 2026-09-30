@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+import logging
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 import requests
+
+
+NVIDIA_ERROR_LOGGER = logging.getLogger("app.nvidia.errors")
 
 
 class NvidiaAPIError(RuntimeError):
@@ -14,6 +19,14 @@ class NvidiaAPIError(RuntimeError):
         )
         self.status_code = status_code
         self.body_preview = body_preview
+        try:
+            payload = json.loads(body_preview)
+        except (TypeError, ValueError):
+            payload = {}
+        detail = str(payload.get("detail", "")).lower() if isinstance(payload, dict) else ""
+        self.deprecated_model = status_code == 410 and (
+            "end of life" in detail or "deprecated" in detail or "deprecat" in detail
+        )
 
 
 class NvidiaPendingResult(RuntimeError):
@@ -22,7 +35,32 @@ class NvidiaPendingResult(RuntimeError):
         self.request_id = request_id
 
 
+@dataclass
+class NvidiaCompletion:
+    """Resposta estruturada da API, preservando dados necessarios para tools."""
+
+    content: str
+    reasoning_content: str | None = None
+    tool_calls: list[dict] = field(default_factory=list)
+    finish_reason: str | None = None
+    message: dict = field(default_factory=dict)
+    model: str | None = None
+
+    @property
+    def assistant_message(self) -> dict:
+        if self.message:
+            return self.message
+        message = {"role": "assistant", "content": self.content}
+        if self.reasoning_content:
+            message["reasoning_content"] = self.reasoning_content
+        if self.tool_calls:
+            message["tool_calls"] = self.tool_calls
+        return message
+
+
 def _parse_content(content: Any) -> str:
+    if content is None:
+        return ""
     if not isinstance(content, list):
         return str(content)
     parts = []
@@ -40,6 +78,13 @@ class NvidiaClient:
 
     def __init__(self, api_key: str | None):
         self.api_key = api_key
+        self.fallback_models: list[str] = []
+        self.deprecated_models: set[str] = set()
+        self._deprecation_notifier: Callable | None = None
+
+    def configure_model_fallbacks(self, models, notifier=None) -> None:
+        self.fallback_models = list(dict.fromkeys(models))
+        self._deprecation_notifier = notifier
 
     @staticmethod
     def is_rate_limit_error(error: Exception) -> bool:
@@ -64,10 +109,7 @@ class NvidiaClient:
 
     @staticmethod
     def supports_reasoning(model: str) -> bool:
-        return model in {
-            "deepseek-ai/deepseek-v4-flash-0731",
-            "deepseek-ai/deepseek-v4-pro-0813",
-        }
+        return False
 
     @staticmethod
     def _is_retryable(error: Exception) -> bool:
@@ -114,27 +156,83 @@ class NvidiaClient:
         if response.status_code == 202:
             request_id = self._request_id(body, response)
             if not request_id:
+                NVIDIA_ERROR_LOGGER.error(
+                    "NVIDIA retornou HTTP 202 sem requestId durante %s; corpo=%s",
+                    request_context, str(body)[:500],
+                )
                 raise RuntimeError("nvidia api error: resposta 202 sem requestId.")
             raise NvidiaPendingResult(request_id)
         if response.status_code >= 400:
             preview = json.dumps(body, ensure_ascii=False)[:500] if body is not None else response.text[:500]
+            NVIDIA_ERROR_LOGGER.error(
+                "NVIDIA API retornou HTTP %s durante %s; corpo=%s",
+                response.status_code, request_context, preview,
+            )
             raise NvidiaAPIError(response.status_code, preview)
         if body is None:
+            NVIDIA_ERROR_LOGGER.error(
+                "NVIDIA API retornou HTTP %s sem JSON durante %s; corpo=%s",
+                response.status_code, request_context, response.text[:500],
+            )
             raise RuntimeError("nvidia api error: resposta nao veio em json.")
-        choices = body.get("choices") or []
-        if not choices:
-            raise RuntimeError("nvidia api error: resposta sem choices.")
+        if not isinstance(body, dict):
+            preview = str(body)[:500]
+            NVIDIA_ERROR_LOGGER.error(
+                "NVIDIA retornou JSON sem objeto de chat durante %s; corpo=%s",
+                request_context, preview,
+            )
+            raise NvidiaAPIError(502, preview)
+        choices = body.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            preview = json.dumps(body, ensure_ascii=False)[:500]
+            NVIDIA_ERROR_LOGGER.error(
+                "NVIDIA retornou payload sem choices de chat durante %s; corpo=%s",
+                request_context, preview,
+            )
+            raise NvidiaAPIError(502, preview)
         message = choices[0].get("message", {})
-        return _parse_content(message.get("content", "")), message.get("reasoning_content")
+        if not isinstance(message, dict):
+            preview = json.dumps(body, ensure_ascii=False)[:500]
+            NVIDIA_ERROR_LOGGER.error(
+                "NVIDIA retornou message invalida durante %s; corpo=%s",
+                request_context, preview,
+            )
+            raise NvidiaAPIError(502, preview)
+        content = _parse_content(message.get("content", ""))
+        reasoning_content = message.get("reasoning_content")
+        tool_calls = message.get("tool_calls") or []
+        if not isinstance(tool_calls, list) or any(not isinstance(item, dict) for item in tool_calls):
+            preview = json.dumps(body, ensure_ascii=False)[:500]
+            NVIDIA_ERROR_LOGGER.error(
+                "NVIDIA retornou tool_calls em formato invalido durante %s; corpo=%s",
+                request_context, preview,
+            )
+            raise NvidiaAPIError(502, preview)
+        if not content.strip() and not tool_calls:
+            preview = json.dumps(body, ensure_ascii=False)[:500]
+            NVIDIA_ERROR_LOGGER.error(
+                "NVIDIA retornou resposta vazia sem tool_calls durante %s; corpo=%s",
+                request_context, preview,
+            )
+            raise NvidiaAPIError(502, preview)
+        return NvidiaCompletion(
+            content=content,
+            reasoning_content=reasoning_content,
+            tool_calls=tool_calls,
+            finish_reason=choices[0].get("finish_reason"),
+            message=message,
+        )
 
     def _chat_once(
         self,
         model: str,
         messages: list[dict],
         *,
-        temperature: float = 0.7,
+        temperature: float = 0.5,
         reasoning_effort: str | None = None,
         max_tokens: int | None = None,
+        tools: list[dict] | None = None,
+        tool_choice: str | dict | None = None,
     ):
         if not self.api_key:
             raise RuntimeError("NVIDIA_API_KEY nao configurada no .env.")
@@ -148,6 +246,10 @@ class NvidiaClient:
             payload["reasoning_effort"] = reasoning_effort
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if tools:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
         response = requests.post(
             f"{self.BASE_URL}/chat/completions",
             headers={
@@ -176,6 +278,70 @@ class NvidiaClient:
         reasoning_effort: str | None = None,
         max_tokens: int | None = None,
     ):
+        completion = await self.chat_completion(
+            model,
+            messages,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+            max_tokens=max_tokens,
+        )
+        return completion.content, completion.reasoning_content
+
+    async def chat_completion(
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        temperature: float = 0.7,
+        reasoning_effort: str | None = None,
+        max_tokens: int | None = None,
+        tools: list[dict] | None = None,
+        tool_choice: str | dict | None = None,
+    ) -> NvidiaCompletion:
+        """Try another supported model if NVIDIA has retired the requested one."""
+        candidates = [model] + [item for item in self.fallback_models if item != model]
+        last_deprecation = None
+        for index, candidate in enumerate(candidates):
+            if candidate in self.deprecated_models:
+                continue
+            try:
+                return await self._chat_completion_once(
+                    candidate, messages, temperature=temperature,
+                    reasoning_effort=reasoning_effort, max_tokens=max_tokens,
+                    tools=tools, tool_choice=tool_choice,
+                )
+            except NvidiaAPIError as error:
+                if not error.deprecated_model:
+                    raise
+                already_notified = candidate in self.deprecated_models
+                self.deprecated_models.add(candidate)
+                last_deprecation = error
+                replacement = next(
+                    (item for item in candidates[index + 1:]
+                     if item not in self.deprecated_models), None
+                )
+                if not already_notified and self._deprecation_notifier is not None:
+                    try:
+                       await self._deprecation_notifier(candidate, replacement)
+                    except Exception as notify_error:
+                        print(f"[nvidia] falha na notificacao de deprecacao: {notify_error}")
+                print(f"[nvidia] modelo {candidate} depreciado; tentando {replacement}.")
+        if last_deprecation is not None:
+            raise last_deprecation
+        raise RuntimeError("Nenhum modelo disponivel na lista de fallback.")
+
+    async def _chat_completion_once(
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        temperature: float = 0.7,
+        reasoning_effort: str | None = None,
+        max_tokens: int | None = None,
+        tools: list[dict] | None = None,
+        tool_choice: str | dict | None = None,
+    ) -> NvidiaCompletion:
+        """Executa uma chamada preservando tool_calls e a mensagem do assistente."""
         loop = asyncio.get_running_loop()
         started_at = loop.time()
         delay_seconds = 5
@@ -191,6 +357,8 @@ class NvidiaClient:
                     temperature=temperature,
                     reasoning_effort=reasoning_effort,
                     max_tokens=max_tokens,
+                    tools=tools,
+                    tool_choice=tool_choice,
                 )
             except NvidiaPendingResult as pending:
                 poll_delay = 2

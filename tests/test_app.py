@@ -4,9 +4,10 @@ import asyncio
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import discord
 
@@ -17,12 +18,15 @@ from app.events.message_events import MessageEventHandler
 from app.events.reaction_events import ReactionEventHandler
 from app.persistence.first_repository import FirstRepository
 from app.persistence.json_store import JsonStore
-from app.services.ai_service import AIService
+from app.services.ai_service import AIService, DEFAULT_MODEL
 from app.services.memory_service import MemoryService
 from app.services.moderation_service import ModerationService
+from app.services.nvidia_client import NvidiaCompletion
 from app.services.vision_service import VisionService
+from app.services.web_search_service import WebSearchService
 from app.services.word_service import WordService
 from app.state import BotState
+from app.tools.registry import ToolRegistry
 
 
 class AppConfigTests(unittest.TestCase):
@@ -76,6 +80,14 @@ class FirstRepositoryTests(unittest.TestCase):
             repository.adjust_first_count("2", "Bob", 3)
             self.assertEqual(repository.count_users(), 2)
             self.assertEqual(repository.get_top_users(0, 10)[0], ("Bob", 3))
+            repository.log_first_event("1", "Alice", datetime(2026, 9, 1, tzinfo=timezone.utc))
+            repository.log_first_event("1", "Alice", datetime(2026, 9, 2, tzinfo=timezone.utc))
+            repository.log_first_event("2", "Bob", datetime(2026, 9, 3, tzinfo=timezone.utc))
+            self.assertEqual(repository.get_top_users_with_ids(25)[0], ("2", "Bob", 3))
+            self.assertEqual(
+                repository.get_monthly_firsts(2026, 9),
+                [("1", "Alice", 2), ("2", "Bob", 1)],
+            )
 
 
 class MemoryTests(unittest.TestCase):
@@ -143,6 +155,23 @@ class MemoryTests(unittest.TestCase):
             self.assertEqual(len(backups), 1)
             self.assertEqual(backups[0].read_text(encoding="utf-8"), "old memory\n")
 
+    def test_custom_memory_is_persisted_and_delimited(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.make_service(directory)
+            entry = service.add_custom_memory(
+                "sempre responder com contexto adicional",
+                user_id=7,
+                user_name="Alice",
+            )
+            self.assertEqual(entry["created_by_id"], "7")
+            markdown = service.all_text()
+            self.assertIn("<!-- Custom -->", markdown)
+            self.assertIn("## Custom", markdown)
+            self.assertIn("sempre responder com contexto adicional", markdown)
+            self.assertIn("<!-- /Custom -->", markdown)
+            state = service.memory_store.load({})
+            self.assertEqual(len(state["__custom_memory__"]), 1)
+
 
 class FakeNvidia:
     def __init__(self, response='{"add":[],"update":[],"delete":[],"ignore":[]}'):
@@ -201,7 +230,7 @@ class AITests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(answer, "resposta especifica")
             self.assertEqual(nvidia.calls[0][0], "moonshotai/kimi-k3")
-            self.assertEqual(service.current_model, "deepseek-ai/deepseek-v4-flash-0731")
+            self.assertEqual(service.current_model, DEFAULT_MODEL)
 
     async def test_memory_summary_parses_json_operations(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -222,6 +251,139 @@ class AITests(unittest.IsolatedAsyncioTestCase):
             saved = service.memory_store.load({})
             self.assertEqual(saved["__memory_buffers__"]["55"], [])
             self.assertEqual(saved["__memory_entries__"][0]["scope"], "user")
+
+    async def test_ai_service_executes_web_search_tool_and_continues_conversation(self):
+        class FakeSearch:
+            def __init__(self):
+                self.calls = []
+
+            async def search(self, query, max_results):
+                self.calls.append((query, max_results))
+                return {
+                    "provider": "fake",
+                    "query": query,
+                    "results": [{
+                        "title": "resultado de teste",
+                        "url": "https://example.com",
+                        "snippet": "informacao encontrada",
+                    }],
+                }
+
+        class ToolNvidia:
+            def __init__(self, responses):
+                self.responses = list(responses)
+                self.calls = []
+
+            async def chat_completion(self, model, messages, **kwargs):
+                self.calls.append({
+                    "model": model,
+                    "messages": [dict(message) for message in messages],
+                    "kwargs": kwargs,
+                })
+                return self.responses.pop(0)
+
+            @staticmethod
+            def is_rate_limit_error(error):
+                return False
+
+            @staticmethod
+            def is_context_length_error(error):
+                return False
+
+        tool_call = {
+            "id": "call-1",
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "arguments": json.dumps({
+                    "query": "noticia de teste",
+                    "max_results": 2,
+                }),
+            },
+        }
+        nvidia = ToolNvidia([
+            NvidiaCompletion(
+                content="",
+                reasoning_content="vou pesquisar",
+                tool_calls=[tool_call],
+                finish_reason="tool_calls",
+                message={
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "vou pesquisar",
+                    "tool_calls": [tool_call],
+                },
+            ),
+            NvidiaCompletion(
+                content="encontrei a informacao.",
+                reasoning_content=None,
+                finish_reason="stop",
+                message={"role": "assistant", "content": "encontrei a informacao."},
+            ),
+        ])
+        search = FakeSearch()
+        with tempfile.TemporaryDirectory() as directory:
+            config = SimpleNamespace(path=lambda name: Path(directory) / name)
+            context = SimpleNamespace(
+                config=config,
+                nvidia=nvidia,
+                tools=ToolRegistry(search),
+                history_store=JsonStore(Path(directory) / "history.json"),
+            )
+            service = AIService(context)
+            service.memory.record_turn = AsyncMock()
+
+            answer = await service.get_response(
+                channel_id="12",
+                author_name="Alice",
+                user_id=7,
+                message_text="qual e a noticia?",
+            )
+
+        self.assertEqual(answer, "encontrei a informacao.")
+        self.assertEqual(search.calls, [("noticia de teste", 2)])
+        self.assertEqual(len(nvidia.calls), 2)
+        self.assertEqual(nvidia.calls[0]["kwargs"]["tools"][0]["function"]["name"], "web_search")
+        self.assertEqual(nvidia.calls[1]["messages"][-1]["role"], "tool")
+        self.assertEqual(
+            nvidia.calls[1]["messages"][-1]["tool_call_id"],
+            "call-1",
+        )
+
+
+class WebSearchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_duckduckgo_response_is_reduced_to_search_context(self):
+        class Response:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {
+                    "Heading": "titulo",
+                    "AbstractText": "descricao",
+                    "AbstractURL": "https://example.com",
+                    "RelatedTopics": [],
+                }
+
+        with patch(
+            "app.services.web_search_service.requests.get",
+            return_value=Response(),
+        ) as request:
+            result = await WebSearchService().search("teste", 1)
+
+        self.assertEqual(result["provider"], "duckduckgo_instant_answer")
+        self.assertEqual(result["results"][0]["url"], "https://example.com")
+        self.assertEqual(request.call_args.kwargs["params"]["q"], "teste")
+
+    async def test_tool_registry_rejects_unknown_tools(self):
+        registry = ToolRegistry(SimpleNamespace())
+        result = await registry.execute_call({
+            "function": {
+                "name": "executar_codigo",
+                "arguments": "{}",
+            }
+        })
+        self.assertIn("nao permitida", result["error"])
 
 
 class VisionTests(unittest.IsolatedAsyncioTestCase):
@@ -313,7 +475,7 @@ class RegistryTests(unittest.TestCase):
         commands = register_all_commands(bot.tree, bot.context)
         names = {command.name for command in commands}
         expected = {
-            "conversar", "enviarmsgllm", "respondermsgllm", "alterarmodelo", "alterarthinking",
+            "conversar", "adicionamemoria", "enviarmsgllm", "respondermsgllm", "alterarmodelo", "alterarthinking",
             "vermemoria", "resetamemoria", "novapalavra", "redefinepalavra",
             "mostrapalavra", "escolhepalavra", "escolhenummensagens", "mantempalavra",
             "significado", "mudaconfigpropaganda", "enviapropaganda", "desbloqueiachat",
@@ -322,6 +484,8 @@ class RegistryTests(unittest.TestCase):
         }
         self.assertEqual(names, expected)
         self.assertEqual(len(names), len(commands))
+        adicionamemoria = next(command for command in commands if command.name == "adicionamemoria")
+        self.assertTrue(adicionamemoria._params["memoria"].required)
         enviarmsgllm = next(command for command in commands if command.name == "enviarmsgllm")
         options = {option.name: option for option in enviarmsgllm._params.values()}
         self.assertTrue(options["prompt"].required)

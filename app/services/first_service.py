@@ -15,7 +15,7 @@ class FirstService:
         print("00:00 (SP), resetando flag 'first' e removendo cargos.")
         self.context.state.flag_first = False
         self.context.history_store.save({})
-        print("conversation_history.json foi limpo no reset diario.")
+        print("logs/conversation_history.json foi limpo no reset diario.")
 
         if not guild:
             return

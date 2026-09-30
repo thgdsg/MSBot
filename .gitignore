@@ -2,6 +2,8 @@
 __pycache__
 conversation_history.json
 discord_bot.db
+message_counts.db*
+logs/
 logs.json
 propagandas.json
 images

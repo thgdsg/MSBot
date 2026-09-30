@@ -112,6 +112,14 @@ class FirstRepository:
             )
             return cursor.fetchall()
 
+    def get_top_users_with_ids(self, limit: int = 25) -> list[tuple[str, str, int]]:
+        with self._connection() as connection:
+            return connection.execute(
+                "SELECT user_id, username, first_count FROM users "
+                "ORDER BY first_count DESC, user_id ASC LIMIT ?",
+                (limit,),
+            ).fetchall()
+
     def count_users(self) -> int:
         with self._connection() as connection:
             return int(connection.execute("SELECT COUNT(*) FROM users").fetchone()[0])
@@ -129,3 +137,16 @@ class FirstRepository:
         """
         with self._connection() as connection:
             return connection.execute(query, (month_str, limit)).fetchall()
+
+    def get_monthly_firsts(self, year: int, month: int) -> list[tuple[str, str, int]]:
+        month_str = f"{year}-{month:02d}"
+        query = """
+            SELECT fl.user_id, u.username, COUNT(fl.log_id) AS monthly_first_count
+            FROM first_logs fl
+            LEFT JOIN users u ON fl.user_id = u.user_id
+            WHERE strftime('%Y-%m', fl.timestamp) = ?
+            GROUP BY fl.user_id
+            ORDER BY monthly_first_count DESC, fl.user_id ASC
+        """
+        with self._connection() as connection:
+            return connection.execute(query, (month_str,)).fetchall()

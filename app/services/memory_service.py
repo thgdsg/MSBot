@@ -7,6 +7,8 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from app.persistence.json_store import JsonStore
+from app.services.model_catalog import MODEL_LIST
+from app.services import writing_style
 
 
 INITIAL_MEMORY_MARKDOWN = """# MEMORY.md
@@ -20,7 +22,7 @@ INITIAL_MEMORY_MARKDOWN = """# MEMORY.md
 
 
 class MemoryService:
-    SUMMARY_MODEL = "deepseek-ai/deepseek-v4-flash-0731"
+    SUMMARY_MODEL = MODEL_LIST[0]
     SUMMARY_MAX_TOKENS = 4096
     SUMMARY_BATCH_SIZE = 10
     THRESHOLD_MESSAGES = 20
@@ -114,6 +116,34 @@ class MemoryService:
             )
         return entries
 
+    def _migrate_custom(self, text: str) -> list[dict]:
+        """Recover a manually maintained Custom section from older markdown."""
+        match = re.search(
+            r"<!--\s*Custom\s*-->(.*?)<!--\s*/Custom\s*-->",
+            text,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        if not match:
+            return []
+        now = datetime.now(timezone.utc).isoformat()
+        entries = []
+        for line in match.group(1).splitlines():
+            value = line.strip()
+            if value.startswith("## ") or not value.startswith("- "):
+                continue
+            value = value[2:].strip()
+            if value:
+                entries.append(
+                    {
+                        "id": hashlib.sha1(f"custom:{value}".encode()).hexdigest()[:16],
+                        "content": value[:4000],
+                        "created_at": now,
+                        "created_by_id": None,
+                        "created_by_name": "legacy",
+                    }
+                )
+        return entries
+
     def _load_state(self) -> dict:
         state = self.memory_store.load({"__memory_buffers__": {}})
         if not isinstance(state, dict):
@@ -123,12 +153,22 @@ class MemoryService:
         for channel_id, buffer in list(state["__memory_buffers__"].items()):
             if not isinstance(buffer, list):
                 state["__memory_buffers__"][channel_id] = []
+        state_changed = False
         if "__memory_entries__" not in state:
             state["__memory_entries__"] = self._migrate_legacy(self._read_markdown())
             state["__memory_schema_version__"] = 2
-            self._save_state(state)
+            state_changed = True
         elif not isinstance(state.get("__memory_entries__"), list):
             state["__memory_entries__"] = []
+            state_changed = True
+        if "__custom_memory__" not in state:
+            state["__custom_memory__"] = self._migrate_custom(self._read_markdown())
+            state_changed = True
+        elif not isinstance(state.get("__custom_memory__"), list):
+            state["__custom_memory__"] = []
+            state_changed = True
+        if state_changed:
+            self._save_state(state)
         return state
 
     def _save_state(self, state: dict) -> None:
@@ -220,7 +260,35 @@ class MemoryService:
             if not by_category:
                 lines.append("- sem memorias registradas ainda.")
             lines.append(f"<!-- /{marker} -->")
+
+        custom_entries = [
+            item
+            for item in state.get("__custom_memory__", [])
+            if isinstance(item, dict) and str(item.get("content", "")).strip()
+        ]
+        if custom_entries:
+            lines.extend(["", "<!-- Custom -->", "## Custom", ""])
+            for item in custom_entries:
+                content = str(item["content"]).strip()
+                created_at = str(item.get("created_at", "desconhecido"))[:19]
+                author = item.get("created_by_name") or item.get("created_by_id")
+                author_label = f"; adicionado por: {author}" if author else ""
+                lines.append(f"- {content} (adicionado: {created_at}{author_label})")
+            lines.extend(["", "<!-- /Custom -->"])
+        style = writing_style.render(state.get("__writing_style__", {}))
+        if style:
+            lines.append(style)
         return "\n".join(lines).strip() + "\n"
+
+    async def review_writing_style(self, answer: str) -> str:
+        """Observe generated prose before filtering so persistent tics remain visible."""
+        async with self.lock:
+            state = self._load_state()
+            style = state.setdefault("__writing_style__", {})
+            writing_style.observe(style, answer)
+            self._save_state(state)
+            self._sync_markdown(state)
+            return writing_style.suppress_filler(answer, style)
 
     def _sync_markdown(self, state: dict) -> None:
         self._write_markdown(self._render(state))
@@ -482,4 +550,46 @@ class MemoryService:
         if not self.seed_path.exists():
             self.seed_path.write_text(INITIAL_MEMORY_MARKDOWN, encoding="utf-8")
         self._write_markdown(self.seed_path.read_text(encoding="utf-8"))
-        self._save_state({"__memory_buffers__": {}, "__memory_entries__": [], "__memory_schema_version__": 2})
+        self._save_state(
+            {
+                "__memory_buffers__": {},
+                "__memory_entries__": [],
+                "__custom_memory__": [],
+                "__memory_schema_version__": 2,
+            }
+        )
+
+    def add_custom_memory(
+        self,
+        content: str,
+        *,
+        user_id: str | int | None = None,
+        user_name: str | None = None,
+    ) -> dict:
+        """Append administrator-provided content to the persistent Custom section."""
+        normalized = str(content).strip().replace("\r\n", "\n")
+        if not normalized:
+            raise ValueError("a memoria Custom nao pode ser vazia")
+        normalized = normalized.replace("<!--", "").replace("-->", "")[:4000]
+        if not normalized.strip():
+            raise ValueError("a memoria Custom nao pode ser vazia")
+
+        state = self._load_state()
+        custom_entries = state.setdefault("__custom_memory__", [])
+        if not isinstance(custom_entries, list):
+            custom_entries = []
+            state["__custom_memory__"] = custom_entries
+        created_at = datetime.now(timezone.utc).isoformat()
+        entry = {
+            "id": hashlib.sha1(
+                f"custom:{created_at}:{normalized}".encode()
+            ).hexdigest()[:16],
+            "content": normalized,
+            "created_at": created_at,
+            "created_by_id": str(user_id) if user_id is not None else None,
+            "created_by_name": user_name,
+        }
+        custom_entries.append(entry)
+        self._save_state(state)
+        self._sync_markdown(state)
+        return entry

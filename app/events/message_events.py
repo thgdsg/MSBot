@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import random
+import asyncio
+
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -25,6 +28,10 @@ class MessageEventHandler:
         state = self.context.state
         if message.author.bot or message.guild is None or str(message.guild.id) != config.server_id:
             return
+
+        repository = getattr(self.context, "message_repository", None)
+        if repository is not None:
+            await asyncio.to_thread(repository.record, message.id, message.guild.id, message.author.id)
 
         if self.bot.user and self.bot.user.mentioned_in(message):
             content = message.content.replace(f"<@{self.bot.user.id}>", "")
@@ -99,3 +106,25 @@ class MessageEventHandler:
             if member and not member.guild_permissions.moderate_members:
                 await message.author.timeout(timedelta(minutes=1), reason="Pingou o Tojao.")
                 await message.channel.send("NAO. PINGUE. O. TOJAO.")
+
+        # Mention replies returned above: they never enter this lottery.
+        if random.randrange(100) == 0:
+            image_urls = extract_image_urls(message)
+            if message.content.strip() or image_urls:
+                async with message.channel.typing():
+                    response = await self.context.ai.get_response(
+                        channel_id=str(message.channel.id),
+                        author_name=message.author.display_name,
+                        user_id=message.author.id,
+                        message_text=message.content,
+                        channel_name=getattr(message.channel, "name", None),
+                        image_urls=image_urls,
+                        spontaneous=True,
+                    )
+                    await self.context.logging.log_ai_interaction(
+                        source="spontaneous",
+                        user_id=message.author.id, user_name=message.author.name,
+                        guild_id=message.guild.id, channel_id=message.channel.id,
+                        message_id=message.id, prompt=message.content, response=response,
+                    )
+                    await reply_in_chunks(message, response)

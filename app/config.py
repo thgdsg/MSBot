@@ -20,6 +20,7 @@ class AppConfig:
     mute_role_id: str | None
     owner_id: str | None
     nvidia_api_key: str | None
+    channel_bot_id: str | None = None
 
     @classmethod
     def from_environment(cls, root_dir: Path | None = None) -> "AppConfig":
@@ -34,6 +35,7 @@ class AppConfig:
             mute_role_id=os.getenv("MUTE_ROLE_ID"),
             owner_id=os.getenv("DAFONZ_ID"),
             nvidia_api_key=os.getenv("NVIDIA_API_KEY"),
+            channel_bot_id=os.getenv("CANAL_BOT"),
         )
 
     @property

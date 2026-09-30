@@ -19,6 +19,7 @@ The AI module includes:
 
 * responses powered by NVIDIA-hosted language models;
 * automatic fallback to a secondary model when the primary model reaches its rate limit;
+* automatic switch to another listed model if NVIDIA retires a model (HTTP 410);
 * retry logic for connection errors and API timeouts;
 * support for replying to one of the bot's previous messages to provide additional context;
 * automatic splitting of responses longer than Discord's 2,000-character limit;
@@ -27,29 +28,45 @@ The AI module includes:
 * automatic conversation summarization;
 * configurable AI model through an administrator command.
 
+If NVIDIA reports that a model reached end of life, the client skips that model
+for future requests, retries with another entry from the supported model list,
+and sends one alert per retired model per bot run to `CANAL_BOT`, mentioning `DAFONZ_ID`.
+Set both variables in `.env` to enable the alert.
+
+If an AI response is still pending after ten minutes, the bot starts one request
+with a second listed model and uses the first successful response. Only the
+winning response may run tools. The hedge can result in two billable API calls
+when the original model is unusually slow.
+
 The default model is:
 
 ```text
-deepseek-ai/deepseek-v4-flash-0731
+deepseek-ai/deepseek-v4.1-flash
 ```
 
 The default fallback model is:
 
 ```text
-minimaxai/minimax-m3
+z-ai/glm-5.3-flash
 ```
 
 Available models include:
 
-| Model                         |
-| ----------------------------- |
-| `minimaxai/minimax-m3`               |
-| `z-ai/glm5.1`                        |
-| `deepseek-ai/deepseek-v4-flash-0731` |
-| `deepseek-ai/deepseek-v4-pro-0813`   |
-| `moonshotai/kimi-k3`                 |
+| Model |
+| ----- |
+| `z-ai/glm-5.3-flash` |
+| `moonshotai/kimi-k3` |
+| `z-ai/glm-5.3` |
+| `deepseek-ai/deepseek-v4.1-flash` |
 
 #### Persistent AI Memory
+
+The bot also tracks its own writing habits in a `WritingStyle` memory section.
+An opening becomes a habit after at least three occurrences and 25% of the
+last 20 generated responses. This memory guides subsequent replies; repeated
+introductory fillers such as `ah,` are removed before sending. Full phrases
+are not cut automatically. Observations persist across restarts, age out of
+the rolling window, and are cleared by the memory reset command.
 
 Conversations are temporarily buffered per Discord channel, retaining the
 author name, Discord user ID and UTC timestamps for each turn.
@@ -66,16 +83,22 @@ operations (`add`, `update`, `delete`, and `ignore`) with scoped memories for
 the server, channel, or user. Entries include categories, confidence,
 timestamps, optional expiration, and conflict history.
 
+Moderators can use `/adicionamemoria memoria` to append administrator-provided
+instructions or facts to a persistent `Custom` section. Discord slash command
+names are lowercase, so the registered command is `/adicionamemoria`.
+
 The AI module uses the following files:
 
 | File                        | Purpose                                  |
 | --------------------------- | ---------------------------------------- |
-| `conversation_history.json` | Stores AI interaction history            |
+| `logs/conversation_history.json` | Stores AI interaction history         |
 | `memory_state.json`         | Stores messages waiting to be summarized |
 | `MEMORY.md`                 | Stores persistent summarized memory      |
 | `memory_backup.md`          | Seed used by the memory reset command    |
 | `memory_backups/`           | Versioned backups of `MEMORY.md`         |
-| `logs.json`                 | Stores commands and AI interaction logs  |
+| `logs/interactions.json`    | Stores commands and AI interaction logs  |
+| `logs/bot.log`              | Runtime output and application logs      |
+| `logs/nvidia_errors.log`    | NVIDIA errors and malformed responses    |
 
 ---
 
@@ -284,6 +307,7 @@ Run the tests with `python -m unittest discover` and start the bot with
 | Command                 | Access    | Description                                  |
 | ----------------------- | --------- | -------------------------------------------- |
 | `/conversar mensagem`   | Everyone  | Sends a message to the AI assistant          |
+| `/adicionamemoria memoria` | Moderator | Adds content to the persistent `Custom` memory section |
 | `/enviarmsgllm prompt [modelo]` | Moderator | Sends an LLM-generated message to the channel |
 | `/alterarmodelo modelo` | Moderator | Changes the primary AI model                 |
 | `/vermemoria`           | Moderator | Displays the current contents of `MEMORY.md` |
@@ -446,6 +470,7 @@ MUTE_ROLE_ID=your_mute_role_id
 
 TOJAO=protected_user_id
 DAFONZ_ID=bot_owner_user_id
+CANAL_BOT=channel_for_bot_alerts
 ```
 
 ### Variable Reference
@@ -459,8 +484,94 @@ DAFONZ_ID=bot_owner_user_id
 | `MUTE_ROLE_ID`   | For mute commands        | Discord role assigned to muted members                |
 | `TOJAO`          | For anti-ping protection | User protected by the automatic anti-ping timeout     |
 | `DAFONZ_ID`      | For owner commands       | User allowed to modify first counts manually          |
+| `CANAL_BOT`      | For model alerts         | Channel where deprecated-model alerts are sent          |
+
+### Web search tool
+
+As respostas da LLM podem usar automaticamente a ferramenta `web_search` quando
+a pergunta depender de informacoes atuais ou desconhecidas. A ferramenta usa
+exclusivamente a API publica de respostas instantaneas do DuckDuckGo, limita a
+consulta a cinco resultados e devolve titulo, URL e resumo para a LLM.
+
+Nenhuma chave de busca adicional e necessaria. Como essa API e baseada em
+respostas instantaneas, ela pode nao encontrar resultados para todas as
+consultas.
 
 ---
+
+## Ferramentas de contexto da LLM
+
+A ferramenta `web_search` continua usando exclusivamente DuckDuckGo. O bot
+tambem pode escolher estas ferramentas, na ordem de registro:
+
+1. `memory_search`: pesquisa memorias por usuario, canal ou servidor, excluindo
+   entradas expiradas; inclui a secao Custom no escopo servidor.
+2. `recent_messages`: recupera as ultimas cinco mensagens em ordem cronologica.
+3. `fetch_url`: extrai ate 8.000 caracteres de paginas publicas HTTP/HTTPS,
+   valida redirecionamentos e limita o download a 512 KB.
+4. `weather`: consulta cidade, clima atual e previsao do dia na
+   [Open-Meteo](https://open-meteo.com/en/docs), sem chave de API.
+5. `first_count`: consulta o placar existente em `discord_bot.db` por ID de
+   usuario; sem cadastro, retorna zero. O banco pertence ao servidor configurado.
+6. `top_firsts`: retorna o top 25 geral com posição, username, apelido atual no
+   servidor e quantidade de firsts.
+7. `monthly_firsts`: recebe ano e mês e retorna cada pessoa única que conseguiu
+   firsts naquele período, com posição, username, apelido e quantidade mensal.
+8. `user_profile`: busca o perfil do usuário da conversa, com IDs, username,
+   display name, avatar/banner, data de criação da conta, apelido, data de
+   entrada no servidor, cargos, permissões relevantes, timeout e uma amostra
+   limitada de mensagens em canais que o bot e o usuário podem ler.
+9. `get_message`: recupera uma mensagem pelo ID, no canal informado ou atual.
+10. `dictionary`: consulta definicoes na biblioteca `python_pt_dictionary`.
+   Sinonimos e traducoes usam resultados do DuckDuckGo como complemento; para
+   traducao e necessario informar o idioma de destino. A biblioteca nao possui
+   campos separados de sinonimos ou traducoes, e a busca pode nao retornar dados.
+11. `calculator`: calcula expressoes aritmeticas localmente, permitindo somente
+    numeros, parenteses e `+`, `-`, `*`, `/`, `//`, `%` e `**`.
+
+O `user_profile` não inventa campos que a API não entrega: bio, pronomes e uma
+contagem histórica total de mensagens são retornados como indisponíveis. A
+atividade de mensagens é apenas uma janela limitada pelo histórico acessível e
+pelas permissões do Discord.
+
+Os IDs de usuario e canal usam o contexto da pergunta quando omitidos. Consultas
+Discord verificam o servidor e as permissoes do autor e do bot; canais restritos
+so podem ser consultados a partir do proprio canal, evitando expor seu conteudo
+em outro. As ferramentas de consulta sao somente de leitura. Cada rodada executa no maximo
+cinco ferramentas, por ate tres rodadas.
+
+## Respostas espontaneas
+
+### Contagem de mensagens e cargos da LLM
+
+`message_count` retorna a quantidade de mensagens do autor registradas no
+servidor desde `tracking_since`, persistidas em `message_counts.db`. Inclui
+menções ao bot e mensagens posteriormente apagadas; eventos repetidos não
+duplicam a contagem. Não importa histórico anterior nem conta mensagens
+enviadas enquanto o bot estava offline. Não armazena o conteúdo das mensagens.
+
+`give_platelminto` atribui o cargo `1194700649301020763` quando a LLM gosta muito
+da mensagem dirigida a ela. `give_homunco` (`1194723205022232637`) e
+`give_quarentena` (`1194720159416467527`) são usados quando ela considera a
+mensagem claramente ofensiva. A decisão é feita pelo modelo conforme o prompt.
+As ferramentas só podem agir no autor atual e nesses IDs fixos; não removem
+outros cargos. O bot precisa de Gerenciar Cargos e de um cargo acima deles.
+O motivo fica no registro de auditoria do Discord. Falhas são retornadas à LLM.
+
+As ferramentas `remove_platelminto`, `remove_homunco` e `remove_quarentena`
+retiram apenas o cargo indicado do autor atual, com as mesmas verificações de
+permissão e hierarquia. Os critérios são inversos aos de atribuição: uma mensagem
+muito ofensiva pode retirar Platelminto; uma mensagem muito apreciada pode retirar
+Homunco e Quarentena. Se o cargo já estiver ausente, retornam `already_absent`
+sem alterar o membro. Uma remoção concluída retorna `removed`.
+
+
+Mensagens de usuarios no servidor configurado, sem mencao ao bot, participam de
+um sorteio independente de 1 em 100. O bot comenta em forma de opiniao propria,
+sabendo que nao foi chamado; imagens passam pelo reconhecimento ja existente.
+Mencoes recebem a resposta normal e nao participam do sorteio. Mensagens de bots
+e mensagens fora do servidor configurado sao ignoradas. Os demais eventos
+(palavra proibida, propagandas e firsts) continuam sendo processados.
 
 ## Advertisement Configuration
 
@@ -518,8 +629,7 @@ The following files are generated during execution and are ignored by Git:
 | --------------------------- | ----------------------------------------- |
 | `.env`                      | Secrets and server configuration          |
 | `discord_bot.db`            | SQLite database for first counts and logs |
-| `logs.json`                 | Slash command and AI interaction logs     |
-| `conversation_history.json` | AI interaction history                    |
+| `logs/`                     | Runtime, command, AI interaction, and NVIDIA error logs |
 | `memory_state.json`         | Pending AI memory buffers                 |
 | `MEMORY.md`                 | Persistent summarized AI memory           |
 | `memory_backup.md`          | Initial memory snapshot used for reset    |
@@ -556,9 +666,8 @@ MSBot/
 ├── images/                  # Local directory, ignored by Git
 ├── MEMORY.md                # Generated at runtime
 ├── memory_state.json        # Generated at runtime
-├── conversation_history.json
-├── discord_bot.db
-└── logs.json
+├── logs/                    # Runtime, interaction, and NVIDIA error logs
+└── discord_bot.db
 ```
 The executable source now lives under `app/`, with commands in
 `app/commands/`, event handlers in `app/events/`, persistence adapters in

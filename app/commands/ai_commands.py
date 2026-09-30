@@ -61,6 +61,29 @@ def register_commands(tree, context) -> list[app_commands.Command]:
             await interaction.followup.send(answer[index : index + 2000])
 
     @app_commands.command(
+        name="adicionamemoria",
+        description="[ADM] Adiciona uma entrada manual na secao Custom da memoria.",
+    )
+    @app_commands.describe(memoria="Texto que sera salvo na memoria Custom")
+    async def adicionamemoria(interaction: discord.Interaction, memoria: str):
+        if not is_moderator(interaction, context):
+            await reject_permission(interaction)
+            return
+        try:
+            async with service.memory.lock:
+                service.memory.add_custom_memory(
+                    memoria,
+                    user_id=interaction.user.id,
+                    user_name=interaction.user.name,
+                )
+        except ValueError as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
+        await interaction.response.send_message(
+            "Memoria adicionada na secao `Custom`.", ephemeral=True
+        )
+
+    @app_commands.command(
         name="enviarmsgllm",
         description="[ADM] Faz o bot enviar uma mensagem gerada pela LLM.",
     )
@@ -154,7 +177,7 @@ def register_commands(tree, context) -> list[app_commands.Command]:
         service.current_fallback_model = "minimaxai/minimax-m3"
         await interaction.response.send_message(f"modelo alterado para {service.current_model}.", ephemeral=True)
 
-    @app_commands.command(name="alterarthinking", description="[ADM] Altera o modo de thinking dos modelos DeepSeek V4.")
+    @app_commands.command(name="alterarthinking", description="[ADM] Altera o esforço de raciocínio do modelo atual, quando suportado.")
     @app_commands.describe(modo="Modo de thinking/reasoning a ser usado")
     @app_commands.choices(modo=[app_commands.Choice(name=mode, value=mode) for mode in THINKING_MODES])
     async def alterar_thinking(interaction: discord.Interaction, modo: app_commands.Choice[str]):
@@ -162,7 +185,7 @@ def register_commands(tree, context) -> list[app_commands.Command]:
             await reject_permission(interaction)
             return
         if not service.nvidia.supports_reasoning(service.current_model):
-            await interaction.response.send_message("O modo thinking so pode ser alterado quando o modelo atual for DeepSeek V4.", ephemeral=True)
+            await interaction.response.send_message("O modelo atual nao oferece ajuste de raciocinio.", ephemeral=True)
             return
         service.current_reasoning_effort = modo.value
         await interaction.response.send_message(f"modo thinking alterado para {service.current_reasoning_effort}.", ephemeral=True)
@@ -192,6 +215,7 @@ def register_commands(tree, context) -> list[app_commands.Command]:
 
     return [
         conversar,
+        adicionamemoria,
         enviarmsgllm,
         responder_msg,
         alterar_modelo,

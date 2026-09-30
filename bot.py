@@ -7,6 +7,7 @@ from app.commands.registry import register_all_commands
 from app.config import AppConfig
 from app.context import AppContext
 from app.events.lifecycle_events import register_all_events
+from app.logging_config import configure_logging
 
 
 class MSBot(commands.Bot):
@@ -66,6 +67,7 @@ client = MSBot()
 
 
 def main() -> None:
+    configure_logging(client.config.path("logs"))
     client.config.validate_runtime()
     client.run(client.config.token)
 
